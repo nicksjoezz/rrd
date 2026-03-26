@@ -317,6 +317,9 @@ class ProtocolMonitor:
                     
                     pos = self.check_position(user, account_data=dec)
                     if pos:
+                        # Record all at-risk positions in database
+                        upsert_position(pos)
+
                         if zombie_queue:
                             result = zombie_queue.update(self.name, user, pos)
                             if result == "fire":
@@ -480,7 +483,6 @@ class MultiProtocolMonitor:
         # Record velocity for all scanned positions (including non-liquidatable)
         for pos in all_positions:
             self.velocity.record(pos["protocol"], pos["user"], pos["health_factor"])
-            upsert_position(pos)
 
         # Also flush any zombie queue items that are now ready
         ready = self.zombie_queue.get_ready()

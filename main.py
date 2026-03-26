@@ -323,7 +323,28 @@ def api_profit_history():
 
 @app.route("/api/positions")
 def api_positions():
-    return jsonify(get_approaching_positions())
+    db_positions = get_approaching_positions()
+    try:
+        zombies = get_monitor().zombie_queue.get_watching()
+        # Merge, preferring database if health factors are updated, but zombies might be more current
+        seen = {f"{p['protocol']}:{p['address'].lower()}" for p in db_positions}
+        for z in zombies:
+            key = f"{z['protocol']}:{z['user'].lower()}"
+            if key not in seen:
+                db_positions.append({
+                    "address": z['user'],
+                    "protocol": z['protocol'],
+                    "health_factor": z['health_factor'],
+                    "total_debt_usd": z.get('total_debt_usd', 0),
+                    "total_col_usd": z.get('total_col_usd', 0),
+                    "collateral_token": z.get('collateral_token', ''),
+                    "debt_token": z.get('debt_token', ''),
+                    "last_updated": z.get('queued_at', time.time())
+                })
+        db_positions.sort(key=lambda x: float(x.get('health_factor', 99)))
+    except Exception:
+        pass
+    return jsonify(db_positions)
 
 @app.route("/api/logs")
 def api_logs():
@@ -703,7 +724,8 @@ def _push_loop():
             try:
                 stats = db_get_stats()
                 try:
-                    m_stats = get_monitor().get_stats()
+                    monitor = get_monitor()
+                    m_stats = monitor.get_stats()
                     stats["zombie_watching"] = m_stats.get("zombie_watching", 0)
                 except Exception:
                     stats["zombie_watching"] = 0
@@ -714,7 +736,29 @@ def _push_loop():
                     "cycle":     _bot_stats["cycle"],
                     "last_scan": _bot_stats["last_scan"],
                 })
-                socketio.emit("positions",  get_approaching_positions()[:20])
+
+                # Merged positions for real-time update
+                db_positions = get_approaching_positions()
+                try:
+                    zombies = monitor.zombie_queue.get_watching()
+                    seen = {f"{p['protocol']}:{p['address'].lower()}" for p in db_positions}
+                    for z in zombies:
+                        key = f"{z['protocol']}:{z['user'].lower()}"
+                        if key not in seen:
+                            db_positions.append({
+                                "address": z['user'],
+                                "protocol": z['protocol'],
+                                "health_factor": z['health_factor'],
+                                "total_debt_usd": z.get('total_debt_usd', 0),
+                                "total_col_usd": z.get('total_col_usd', 0),
+                                "collateral_token": z.get('collateral_token', ''),
+                                "debt_token": z.get('debt_token', ''),
+                                "last_updated": z.get('queued_at', time.time())
+                            })
+                    db_positions.sort(key=lambda x: float(x.get('health_factor', 99)))
+                except Exception:
+                    pass
+                socketio.emit("positions",  db_positions[:25])
             except Exception:
                 pass
         time.sleep(3)

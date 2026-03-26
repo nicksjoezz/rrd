@@ -211,5 +211,17 @@ async function loadChart() {
 }
 
 loadChart();
+
+/* Load initial data immediately */
+(async () => {
+  const [statsR, posR] = await Promise.all([
+    fetch('/api/stats'),
+    fetch('/api/positions')
+  ]);
+  const stats = await statsR.json();
+  const positions = await posR.json();
+  onStats(stats);
+  onPositions(positions);
+})();
 </script>
 {% endblock %}

@@ -294,7 +294,11 @@ input:checked + .toggle-slider::before { transform: translateX(18px); background
   .page { padding: 15px; }
   .stat-value { font-size: 24px; }
 
-  .data-table { display: block; overflow-x: auto; }
+  .topbar-title { font-size: 9px; letter-spacing: 0.1em; }
+  .topbar-mode { padding: 3px 6px; font-size: 8px; }
+
+  .data-table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .data-table th, .data-table td { white-space: nowrap; }
 
   #sidebar-overlay {
     display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5);

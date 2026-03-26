@@ -187,5 +187,12 @@ function renderPositions() {
     </tr>`;
   }).join('');
 }
+
+/* Load initial positions immediately */
+(async () => {
+  const r = await fetch('/api/positions');
+  const d = await r.json();
+  onPositions(d);
+})();
 </script>
 {% endblock %}

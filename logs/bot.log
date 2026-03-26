@@ -12,3 +12,11 @@
 2026-03-26 22:07:47 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
 2026-03-26 22:07:47 [INFO] liquidation_bot.zombie: [ZOMBIE] Loaded 1 positions from zombies.json
 2026-03-26 22:07:48 [INFO] liquidation_bot.monitor: Initialized protocol monitor: aave_v3 (topic: 0xb3d08482...)
+2026-03-26 22:26:46 [INFO] liquidation_bot.zombie: [ZOMBIE] Loaded 1 positions from zombies.json
+2026-03-26 22:26:46 [INFO] liquidation_bot.monitor: Initialized protocol monitor: aave_v3 (topic: 0xb3d08482...)
+2026-03-26 22:27:05 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
+2026-03-26 22:27:05 [INFO] liquidation_bot.zombie: [ZOMBIE] Loaded 1 positions from zombies.json
+2026-03-26 22:27:05 [INFO] liquidation_bot.monitor: Initialized protocol monitor: aave_v3 (topic: 0xb3d08482...)
+2026-03-26 22:31:08 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
+2026-03-26 22:31:08 [INFO] liquidation_bot.zombie: [ZOMBIE] Loaded 1 positions from zombies.json
+2026-03-26 22:31:08 [INFO] liquidation_bot.monitor: Initialized protocol monitor: aave_v3 (topic: 0xb3d08482...)
