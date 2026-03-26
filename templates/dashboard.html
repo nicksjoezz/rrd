@@ -34,7 +34,7 @@
 {% endblock %}
 
 {% block content %}
-<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px">
+<div class="grid-4" style="margin-bottom:24px">
   <div class="stat-block animate-in">
     <div class="stat-label">Total Profit Est.</div>
     <div class="stat-value" id="d-total-profit">$0.00</div>
@@ -125,6 +125,7 @@ function onStats(d) {
   setEl('d-total-liqs',   d.total_liquidations);
   setEl('d-today-liqs',   'Today: ' + d.today_liquidations);
   setEl('d-borrowers',    fmtNum(d.total_borrowers));
+  setEl('d-zombie',       d.zombie_watching !== undefined ? d.zombie_watching : '—');
 
   // Recent liquidations table
   const tbody = document.getElementById('recent-body');
@@ -150,7 +151,6 @@ function onStats(d) {
 
 function onPositions(positions) {
   const tbody = document.getElementById('approaching-body');
-  setEl('d-zombie', positions.filter(p => p.health_factor >= 0.95 && p.health_factor <= 1.05).length);
 
   if (!positions.length) {
     tbody.innerHTML = '<tr><td colspan="4" class="dim" style="text-align:center;padding:20px">Market healthy</td></tr>';

@@ -13,6 +13,8 @@
   color: var(--text-lo); letter-spacing: 0.15em;
 }
 .kpi-row { display: grid; grid-template-columns: repeat(5,1fr); gap: 12px; margin-bottom: 20px; }
+@media (max-width: 1024px) { .kpi-row { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 600px) { .kpi-row { grid-template-columns: repeat(2, 1fr); } }
 .kpi-box {
   background: var(--bg2); border: 1px solid var(--border);
   padding: 14px 16px; text-align: center;

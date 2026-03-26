@@ -26,6 +26,7 @@ from bot.utils    import load_config, get_web3, get_account, cfg, logger, notify
 from bot.database import (
     get_stats as db_get_stats, get_approaching_positions, init_db
 )
+from bot.monitor import MultiProtocolMonitor
 
 # -- Flask app -----------------------------------------------------------------
 app = Flask(__name__, template_folder=str(ROOT / "templates"))
@@ -39,6 +40,14 @@ LOG_PATH.parent.mkdir(exist_ok=True)
 _bot_running  = threading.Event()
 _bot_lock     = threading.Lock()
 _bot_stats    = {"cycle": 0, "last_scan": None, "positions_found": 0}
+_monitor      = None
+
+def get_monitor():
+    global _monitor
+    with _bot_lock:
+        if _monitor is None:
+            _monitor = MultiProtocolMonitor()
+        return _monitor
 
 def bot_is_running():
     return _bot_running.is_set()
@@ -63,7 +72,7 @@ def stop_bot_engine():
 # -- Bot loop -- runs 24/7, executes immediately when opportunities found --------
 def _bot_loop():
     try:
-        from bot.monitor         import MultiProtocolMonitor
+        monitor  = get_monitor()
         from bot.liquidator      import LiquidationExecutor
         from bot.profitability   import rank_positions
         from bot.oracle_watcher  import OracleWatcher
@@ -74,7 +83,6 @@ def _bot_loop():
         from bot.ws_streamer     import WebSocketStreamer
         from bot.emode_detector  import flag_emode_risk_positions
 
-        monitor  = MultiProtocolMonitor()
         executor = LiquidationExecutor()
         tuner    = get_tuner()
         _emerg   = threading.Event()
@@ -286,7 +294,13 @@ def page_wallet():     return render_template("wallet.html")
 # ── API: stats & positions ────────────────────────────────────────────────────
 @app.route("/api/stats")
 def api_stats():
-    return jsonify(db_get_stats())
+    stats = db_get_stats()
+    try:
+        m_stats = get_monitor().get_stats()
+        stats["zombie_watching"] = m_stats.get("zombie_watching", 0)
+    except Exception:
+        stats["zombie_watching"] = 0
+    return jsonify(stats)
 
 @app.route("/api/profit-history")
 def api_profit_history():
@@ -688,6 +702,11 @@ def _push_loop():
         with app.app_context():
             try:
                 stats = db_get_stats()
+                try:
+                    m_stats = get_monitor().get_stats()
+                    stats["zombie_watching"] = m_stats.get("zombie_watching", 0)
+                except Exception:
+                    stats["zombie_watching"] = 0
                 socketio.emit("stats",      stats)
                 socketio.emit("bot_status", {
                     "running":   bot_is_running(),

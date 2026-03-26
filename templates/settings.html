@@ -8,6 +8,7 @@
 .mode-banner {
   display: flex; align-items: center; justify-content: space-between;
   padding: 18px 24px; margin-bottom: 24px;
+  flex-wrap: wrap; gap: 20px;
   border: 2px solid var(--border);
   background: var(--bg1); position: relative; overflow: hidden;
   transition: border-color 0.3s, box-shadow 0.3s;
@@ -85,6 +86,7 @@
 
 /* ── Settings layout ─────────────────────────────────────────────────── */
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 1024px) { .settings-grid { grid-template-columns: 1fr; } }
 .settings-section { margin-bottom: 28px; }
 .section-title {
   font-family: var(--font-hud); font-size: 9px; letter-spacing: 0.3em;

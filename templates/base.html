@@ -33,6 +33,7 @@
   --glow-sim:  0 0 14px #ff900088, 0 0 40px #ff900033;
   --font-mono: 'IBM Plex Mono', 'Share Tech Mono', monospace;
   --font-hud:  'Orbitron', monospace;
+  --sidebar-w: 220px;
 }
 
 html { font-size: 14px; scroll-behavior: smooth; }
@@ -54,11 +55,12 @@ body::after {
 
 /* ── Sidebar ── */
 #sidebar {
-  width: 220px; flex-shrink: 0;
+  width: var(--sidebar-w); flex-shrink: 0;
   background: linear-gradient(180deg, var(--bg1) 0%, var(--bg) 100%);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column;
   position: fixed; top: 0; left: 0; bottom: 0; z-index: 10; padding: 0 0 24px;
+  transition: transform 0.3s ease;
 }
 .sidebar-logo { padding: 24px 20px 20px; border-bottom: 1px solid var(--border); }
 .logo-mark {
@@ -139,7 +141,7 @@ body::after {
 }
 
 /* ── Main ── */
-#main { margin-left: 220px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+#main { margin-left: var(--sidebar-w); flex: 1; display: flex; flex-direction: column; min-height: 100vh; transition: margin-left 0.3s ease; }
 
 /* ── Topbar ── */
 #topbar {
@@ -263,6 +265,43 @@ input:checked + .toggle-slider::before { transform: translateX(18px); background
 .mt-4{margin-top:4px} .mt-8{margin-top:8px} .mt-16{margin-top:16px} .mt-24{margin-top:24px}
 .mb-16{margin-bottom:16px} .flex{display:flex} .items-center{align-items:center}
 .justify-between{justify-content:space-between} .flex-1{flex:1} .gap-8{gap:8px}
+
+/* ── Mobile & Tablet Optimizations ── */
+#mobile-nav-toggle {
+  display: none;
+  background: none; border: none; color: var(--green);
+  font-size: 20px; cursor: pointer; padding: 10px; z-index: 100;
+}
+
+@media (max-width: 1024px) {
+  :root { --sidebar-w: 200px; }
+  .grid-4 { grid-template-columns: repeat(2, 1fr); }
+  .topbar-metrics { gap: 12px; }
+}
+
+@media (max-width: 768px) {
+  #sidebar { transform: translateX(-100%); background: var(--bg); box-shadow: 10px 0 20px rgba(0,0,0,0.5); }
+  #sidebar.open { transform: translateX(0); }
+  #main { margin-left: 0; }
+  #mobile-nav-toggle { display: block; }
+
+  .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+
+  #topbar { padding: 0 15px; }
+  .topbar-right { gap: 10px; }
+  .topbar-metrics { display: none; } /* Hide metrics in topbar on mobile to save space */
+
+  .page { padding: 15px; }
+  .stat-value { font-size: 24px; }
+
+  .data-table { display: block; overflow-x: auto; }
+
+  #sidebar-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+    z-index: 9; backdrop-filter: blur(2px);
+  }
+  #sidebar-overlay.show { display: block; }
+}
 </style>
 {% block extra_head %}{% endblock %}
 </head>
@@ -324,7 +363,9 @@ input:checked + .toggle-slider::before { transform: translateX(18px); background
 
   <!-- Main -->
   <div id="main">
+    <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
     <header id="topbar">
+      <button id="mobile-nav-toggle" onclick="toggleSidebar()">☰</button>
       <div class="topbar-title">{% block page_title %}<span>DASHBOARD</span>{% endblock %}</div>
       <div class="topbar-right">
         <!-- Mode pill in topbar -->
@@ -454,6 +495,22 @@ async function toggleBot(){
   const d = await r.json();
   if(!d.ok) alert(d.msg);
 }
+
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  sidebar.classList.toggle('open');
+  if (overlay) overlay.classList.toggle('show');
+}
+
+/* Close sidebar when clicking a link on mobile */
+document.querySelectorAll('.nav-link').forEach(link => {
+  link.addEventListener('click', () => {
+    if (window.innerWidth <= 768) {
+      toggleSidebar();
+    }
+  });
+});
 
 /* Load current mode on page load */
 (async()=>{
