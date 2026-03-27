@@ -170,9 +170,8 @@ class ProtocolMonitor:
             if debt_usd < min_debt or debt_usd > max_debt:
                 return None
 
-            # Only care about positions near or below threshold
-            zombie_entry = cfg("strategy", "zombie_queue", "entry_hf")
-            if hf > zombie_entry:
+            # Track positions up to 1.15 HF to keep dashboard updated during recovery
+            if hf > 1.15:
                 return None
 
             # Find best collateral and debt token
