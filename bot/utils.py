@@ -260,6 +260,21 @@ def health_factor_float(hf_raw: int) -> float:
         return float("inf")
     return hf_raw / 1e18
 
+def call_with_retry(func, *args, retries=3, backoff=0.5, **kwargs):
+    """Call a web3 function with retries and exponential backoff."""
+    import time
+    last_err = None
+    for i in range(retries):
+        try:
+            return func(*args, **kwargs).call()
+        except Exception as e:
+            last_err = e
+            # Log error if it's the last retry
+            if i == retries - 1:
+                logger.debug(f"Web3 call failed after {retries} attempts: {e}")
+            time.sleep(backoff * (2 ** i))
+    raise last_err
+
 # ── Telegram notifications (optional) ────────────────────────────────────────
 def notify(message: str):
     try:

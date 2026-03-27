@@ -24,7 +24,8 @@ from .utils import (
     wei_to_usd_base, health_factor_float,
     AAVE_POOL_ABI, DATA_PROVIDER_ABI,
     logger, notify,
-    MULTICALL3_ADDR, MULTICALL3_ABI
+    MULTICALL3_ADDR, MULTICALL3_ABI,
+    call_with_retry
 )
 from .swap_router import get_best_swap
 import urllib.request as _urllib
@@ -34,7 +35,8 @@ import urllib.request as _urllib
 from .zombie_queue import ZombieQueue
 from .database import (
     upsert_borrowers, get_borrowers, upsert_position,
-    get_last_scan_block, set_last_scan_block
+    get_last_scan_block, set_last_scan_block, delete_stale_positions,
+    delete_position
 )
 from .velocity import VelocityTracker
 
@@ -149,9 +151,7 @@ class ProtocolMonitor:
             if account_data:
                 data = account_data
             else:
-                data = self.pool.functions.getUserAccountData(
-                    checksum(user)
-                ).call()
+                data = call_with_retry(self.pool.functions.getUserAccountData, checksum(user))
 
             total_col  = data[0]
             total_debt = data[1]
@@ -179,7 +179,11 @@ class ProtocolMonitor:
             if not tokens:
                 return None
 
-            col_token, col_symbol, col_bonus, debt_token, debt_symbol, debt_raw = tokens
+            try:
+                col_token, col_symbol, col_bonus, debt_token, debt_symbol, debt_raw = tokens
+            except ValueError:
+                logger.error(f"[{self.name}] Failed to unpack tokens for {user[:10]}: {tokens}")
+                return None
 
             # Close factor: 100% if HF < 0.95 OR position < $2k, else 50%
             close_factor = cfg("strategy", "close_factor")
@@ -208,7 +212,7 @@ class ProtocolMonitor:
             }
 
         except Exception as e:
-            logger.debug(f"[{self.name}] check_position error for {user[:8]}: {e}")
+            logger.warning(f"[{self.name}] check_position error for {user[:10]}: {e}")
             return None
 
     def _get_best_tokens(self, user: str):
@@ -236,9 +240,7 @@ class ProtocolMonitor:
                 return None
 
             try:
-                rd = self.data_provider.functions.getUserReserveData(
-                    checksum(addr), checksum(user)
-                ).call()
+                rd = call_with_retry(self.data_provider.functions.getUserReserveData, checksum(addr), checksum(user))
 
                 a_token_bal   = rd[0]  # collateral
                 variable_debt = rd[2]  # debt
@@ -313,22 +315,29 @@ class ProtocolMonitor:
                     
                     hf = health_factor_float(dec[5])
                     
-                    pos = self.check_position(user, account_data=dec)
-                    if pos:
-                        # Record all at-risk positions in database
-                        upsert_position(pos)
+                    try:
+                        pos = self.check_position(user, account_data=dec)
+                        if pos:
+                            # Record all at-risk positions in database
+                            upsert_position(pos)
 
-                        if zombie_queue:
-                            result = zombie_queue.update(self.name, user, pos)
-                            if result == "fire":
+                            if zombie_queue:
+                                result = zombie_queue.update(self.name, user, pos)
+                                if result == "fire":
+                                    liquidatable.append(pos)
+                            elif hf <= 1.0:
                                 liquidatable.append(pos)
-                        elif hf <= 1.0:
-                            liquidatable.append(pos)
-                    else:
-                        # If pos is None, it's either healthy or debt-free
-                        # We should still notify zombie_queue so it can remove recovered positions
-                        if zombie_queue:
-                            zombie_queue.update(self.name, user, {"health_factor": hf})
+                        else:
+                            # If pos is None, it's either healthy or debt-free
+                            # Remove from database as it's no longer at risk
+                            delete_position(user, self.name)
+
+                            # We should still notify zombie_queue so it can remove recovered positions
+                            if zombie_queue:
+                                zombie_queue.update(self.name, user, {"health_factor": hf})
+                    except Exception as e:
+                        logger.error(f"[{self.name}] Error checking position for {user[:10]}: {e}")
+                        # On error, we do NOT update the zombie queue to avoid corrupting data with $0 defaults
                             
             except Exception as e:
                 logger.error(f"[{self.name}] Multicall batch error: {e}")
@@ -496,6 +505,12 @@ class MultiProtocolMonitor:
         # Evict stale entries
         self.zombie_queue.evict_old()
         self.velocity.cleanup()
+
+        # Prune positions table in SQLite (e.g. users who repaid and are no longer scanned)
+        try:
+            delete_stale_positions(max_age_seconds=86400)
+        except Exception:
+            pass
 
         return all_positions
 

@@ -104,6 +104,17 @@ def upsert_borrowers(addresses: List[str], protocol: str):
     finally:
         conn.close()
 
+def delete_position(address: str, protocol: str):
+    conn = get_conn()
+    try:
+        conn.execute(
+            "DELETE FROM positions WHERE address=? AND protocol=?",
+            (address.lower(), protocol)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
 
 def get_borrowers(protocol: str) -> List[str]:
     conn = get_conn()
@@ -170,6 +181,16 @@ def get_approaching_positions(max_hf: float = 1.15) -> List[dict]:
             (max_hf,)
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+def delete_stale_positions(max_age_seconds: int = 86400):
+    """Delete positions that haven't been updated in 24 hours."""
+    now = int(time.time())
+    conn = get_conn()
+    try:
+        conn.execute("DELETE FROM positions WHERE last_updated < ?", (now - max_age_seconds,))
+        conn.commit()
     finally:
         conn.close()
 
