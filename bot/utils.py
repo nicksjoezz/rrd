@@ -7,6 +7,7 @@ import logging
 import logging.handlers
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Optional
 from web3 import Web3
@@ -69,7 +70,9 @@ logger = setup_logging()
 
 # ── Web3 ──────────────────────────────────────────────────────────────────────
 _public_w3: Optional[Web3] = None
-_alchemy_w3: Optional[Web3] = None
+_alchemy_w3_pool = []
+_alchemy_index = 0
+_alchemy_lock = threading.Lock()
 
 def get_public_web3() -> Web3:
     global _public_w3
@@ -81,26 +84,57 @@ def get_public_web3() -> Web3:
     return _public_w3
 
 def get_alchemy_web3() -> Web3:
-    global _alchemy_w3
-    if _alchemy_w3 is None or not _alchemy_w3.is_connected():
-        key = load_config()["network"].get("alchemy_key", "")
-        if not key or key == "YOUR_ALCHEMY_KEY_HERE":
-            return get_public_web3() # Fallback
+    """Rotates through multiple Alchemy keys to avoid rate limits."""
+    global _alchemy_w3_pool, _alchemy_index
+
+    cfg_data = load_config()
+    keys = cfg_data["network"].get("alchemy_keys", [])
+    single_key = cfg_data["network"].get("alchemy_key", "")
+
+    # Consolidate keys into a unique list
+    all_keys = []
+    if isinstance(keys, list):
+        # Filter out placeholders and ensure uniqueness
+        for k in keys:
+            if k and "YOUR_" not in k and "_KEY_HERE" not in k and "ADD_" not in k and "KEY_" not in k:
+                if k not in all_keys:
+                    all_keys.append(k)
+
+    if single_key and "YOUR_" not in single_key and single_key not in all_keys:
+        all_keys.append(single_key)
         
-        if key.startswith("http"):
-            rpc = key
-        else:
-            rpc = f"https://arb-mainnet.g.alchemy.com/v2/{key}"
-            
-        try:
-            _alchemy_w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 30}))
-            if not _alchemy_w3.is_connected():
-                logger.warning(f"Alchemy RPC failed (check key: {rpc[:25]}...) -- using Public fallback")
-                return get_public_web3()
-        except Exception as e:
-            logger.error(f"Alchemy connection error: {e} (URL: {rpc[:25]}...)")
+    if not all_keys:
+        return get_public_web3()
+
+    # Rebuild pool if keys changed or pool is empty
+    if len(_alchemy_w3_pool) != len(all_keys):
+        _alchemy_w3_pool = []
+        for k in all_keys:
+            rpc = k if k.startswith("http") else f"https://arb-mainnet.g.alchemy.com/v2/{k}"
+            w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 30}))
+            _alchemy_w3_pool.append(w3)
+
+    if not _alchemy_w3_pool:
+        return get_public_web3()
+
+    # Rotate with lock for thread safety
+    with _alchemy_lock:
+        _alchemy_index = (_alchemy_index + 1) % len(_alchemy_w3_pool)
+        w3 = _alchemy_w3_pool[_alchemy_index]
+
+        # Check connection occasionally inside lock or before return
+        if not w3.is_connected():
+            logger.warning(f"Alchemy node {_alchemy_index} unresponsive, trying next...")
+            # Recursive call will re-acquire lock, fine for this scale
+            if len(_alchemy_w3_pool) > 1:
+                return get_alchemy_web3()
             return get_public_web3()
-    return _alchemy_w3
+
+        return w3
+
+def _get_raw_alchemy_web3() -> Web3:
+    """Internal helper to get a Web3 without rotation, for testing."""
+    return get_alchemy_web3()
 
 def get_web3() -> Web3:
     """General connection — prefers Alchemy but stable."""

@@ -68,7 +68,7 @@ class MorphoBlueMonitor:
         Morpho Supply (topic0: 0x4f128c...90) or Borrow.
         We scan Borrow events.
         """
-        w3 = get_public_web3()
+        w3 = get_web3()
         # Borrow event: Borrow(bytes32 indexed id, address caller, address indexed onBehalfOf,
         #   address receiver, uint256 assets, uint256 shares)
         BORROW_TOPIC = "0x013a3e29f3796d833454b5093e0315183495d015c92c89280145c360098df156"
@@ -189,7 +189,7 @@ class SiloV2Monitor:
         Scan Borrow events for each Silo.
         Silo V2 Borrow topic: 0x312a5e5e1079f5dda4e95dbbd0b908b291fd5b992ef22073643ab691572c5b52
         """
-        w3 = get_public_web3()
+        w3 = get_web3()
         BORROW_TOPIC = "0x312a5e5e1079f5dda4e95dbbd0b908b291fd5b992ef22073643ab691572c5b52"
 
         if not self._silo_addresses:
@@ -322,7 +322,7 @@ class CompoundIIIMonitor:
         """
         Compound III Supply event (topic0: 0xd6d480d5b3068db003533b170d67561494d72e3bf9fa40a266471351ebba9e16)
         """
-        w3 = get_public_web3()
+        w3 = get_web3()
         chunk = cfg("scanning", "event_scan_chunk")
         SUPPLY_TOPIC = "0xd6d480d5b3068db003533b170d67561494d72e3bf9fa40a266471351ebba9e16"
         new_borrowers = set()
@@ -459,7 +459,7 @@ class ProtocolMonitor:
         Raw eth_getLogs bypasses all ABI decoding — onBehalfOf lives in topics[2]
         as a standard 32-byte indexed address, which we read directly.
         """
-        w3    = get_public_web3()
+        w3    = get_web3()
         chunk = cfg("scanning", "event_scan_chunk")
         # Use protocol-specific topic0
         new_borrowers = set()
@@ -661,13 +661,14 @@ class ProtocolMonitor:
         liquidatable = []
         if not users: return []
         
-        w3 = get_web3()
-        mc = w3.eth.contract(address=MULTICALL3_ADDR, abi=MULTICALL3_ABI)
-        
         batch_size = cfg("scanning", "batch_size") or 500
         zombie_entry = cfg("strategy", "zombie_queue", "entry_hf")
 
         for i in range(0, len(users), batch_size):
+            # Rotate Web3 for each batch
+            w3 = get_web3()
+            mc = w3.eth.contract(address=MULTICALL3_ADDR, abi=MULTICALL3_ABI)
+
             chunk = users[i : i + batch_size]
             calls = []
             
@@ -677,6 +678,9 @@ class ProtocolMonitor:
                 calls.append({"target": self.pool.address, "callData": call_data})
             
             try:
+                # Use call_with_retry but since mc is bound to a specific w3,
+                # we might need to be careful. However, mc.functions.aggregate(...).call()
+                # uses the provider in mc.w3.
                 _, return_data = mc.functions.aggregate(calls).call()
                 
                 # Step 2: Process results
