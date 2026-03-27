@@ -202,12 +202,32 @@ CHAINLINK_FEED_ABI = json.loads('''[
 LIQUIDATOR_CONTRACT_ABI = json.loads('''[
   {"name":"executeLiquidation","type":"function","stateMutability":"nonpayable",
    "inputs":[
+     {"name":"protocol","type":"uint8"},
      {"name":"debtToken","type":"address"},
      {"name":"collateralToken","type":"address"},
      {"name":"borrower","type":"address"},
      {"name":"debtAmount","type":"uint256"},
-     {"name":"lendingPool","type":"address"},
-     {"name":"swapFee","type":"uint24"}
+     {"name":"pool","type":"address"},
+     {"name":"swapFee","type":"uint24"},
+     {"name":"minProfit","type":"uint256"},
+     {"name":"morphoParams","type":"bytes"}
+   ],"outputs":[]},
+  {"name":"executeLiquidationMultiHop","type":"function","stateMutability":"nonpayable",
+   "inputs":[
+     {"name":"protocol","type":"uint8"},
+     {"name":"debtToken","type":"address"},
+     {"name":"collateralToken","type":"address"},
+     {"name":"borrower","type":"address"},
+     {"name":"debtAmount","type":"uint256"},
+     {"name":"pool","type":"address"},
+     {"name":"minProfit","type":"uint256"},
+     {"name":"swapPath","type":"bytes"},
+     {"name":"morphoParams","type":"bytes"}
+   ],"outputs":[]},
+  {"name":"absorbCompound","type":"function","stateMutability":"nonpayable",
+   "inputs":[
+     {"name":"comet","type":"address"},
+     {"name":"accounts","type":"address[]"}
    ],"outputs":[]},
   {"name":"withdraw","type":"function","stateMutability":"nonpayable",
    "inputs":[{"name":"token","type":"address"}],"outputs":[]},

@@ -419,6 +419,9 @@ def api_config_save():
         with open(ROOT / "config.json", "w") as f:
             json.dump(new, f, indent=2)
         import bot.utils as _u; _u._config = None
+        # Dynamic reload of protocols in the monitor
+        m = get_monitor()
+        if m: m.reload_protocols()
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)})

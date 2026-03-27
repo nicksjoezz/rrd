@@ -74,6 +74,26 @@ class LiquidationExecutor:
 
     def _build_tx(self, position: dict, gas_params: dict) -> dict:
         """Build the liquidation transaction dict (used for both simulate and live)."""
+        protocol_name = position.get("protocol", "aave_v3").lower()
+
+        # Mapping: 0: AaveV3/Radiant, 1: SiloV2, 2: MorphoBlue
+        proto_id = 0
+        if "silo" in protocol_name: proto_id = 1
+        elif "morpho" in protocol_name: proto_id = 2
+
+        # Special case: Compound III (no flash loan)
+        if "compound" in protocol_name:
+            nonce = self._w3.eth.get_transaction_count(self._account.address)
+            return self._contract.functions.absorbCompound(
+                checksum(position["pool_address"]),
+                [checksum(position["user"])]
+            ).build_transaction({
+                "from":    self._account.address,
+                "nonce":   nonce,
+                "chainId": cfg("network", "chain_id"),
+                **gas_params,
+            })
+
         col_token    = position["collateral_token"]
         debt_token   = position["debt_token"]
         debt_amount  = position["debt_to_cover"]
@@ -81,10 +101,6 @@ class LiquidationExecutor:
         swap_fee     = get_swap_fee(col_token, debt_token)
         profit_info  = position.get("profit_info", {})
         nonce        = self._w3.eth.get_transaction_count(self._account.address)
-
-        # Check for multi-hop route from swap_router
-        swap_params = position.get("swap_params", {})
-        is_multi    = swap_params.get("route") == "multi"
 
         # 4. Profitability & Slippage protection (on-chain)
         # We'll set min_profit to 50% of our estimated net profit.
@@ -97,23 +113,30 @@ class LiquidationExecutor:
             debt_info = token_map.get(debt_token.lower(), {"decimals": 18})
             min_profit_wei = int((target_profit_usd / debt_price) * (10 ** debt_info["decimals"]))
 
-            path = swap_params.get("path", b"")
-            if isinstance(path, str) and path.startswith("0x"):
-                path = bytes.fromhex(path[2:])
-            elif isinstance(path, str) and path.startswith("hex:"):
-                path = bytes.fromhex(path[4:])
-            elif isinstance(path, str):
-                try: path = bytes.fromhex(path)
-                except: pass
+        swap_params = position.get("swap_params", {})
+        path = swap_params.get("path", b"")
+        if isinstance(path, str) and path.startswith("0x"):
+            path = bytes.fromhex(path[2:])
+        elif isinstance(path, str) and path.startswith("hex:"):
+            path = bytes.fromhex(path[4:])
+        elif isinstance(path, str):
+            try: path = bytes.fromhex(path)
+            except: pass
 
+        morpho_params = position.get("morpho_params", b"")
+        if not morpho_params: morpho_params = b""
+
+        if path:
             return self._contract.functions.executeLiquidationMultiHop(
+                proto_id,
                 checksum(debt_token),
                 checksum(col_token),
                 checksum(position["user"]),
                 debt_amount,
                 checksum(pool_address),
+                min_profit_wei,
                 path,
-                min_profit_wei
+                morpho_params
             ).build_transaction({
                 "from":    self._account.address,
                 "nonce":   nonce,
@@ -122,13 +145,15 @@ class LiquidationExecutor:
             })
         else:
             return self._contract.functions.executeLiquidation(
+                proto_id,
                 checksum(debt_token),
                 checksum(col_token),
                 checksum(position["user"]),
                 debt_amount,
                 checksum(pool_address),
                 swap_fee,
-                min_profit_wei
+                min_profit_wei,
+                morpho_params
             ).build_transaction({
                 "from":    self._account.address,
                 "nonce":   nonce,
