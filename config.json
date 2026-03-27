@@ -2,7 +2,7 @@
   "network": {
     "rpc_http": "https://arb1.arbitrum.io/rpc",
     "rpc_ws": "wss://arb1.arbitrum.io/ws",
-    "alchemy_key": "9fVR5rZUC-g2L5zbeywTA",
+    "alchemy_keys": ["9fVR5rZUC-g2L5zbeywTA"],
     "chain_id": 42161,
     "chain_name": "Arbitrum One"
   },
@@ -14,164 +14,41 @@
     "aave_v3": {
       "enabled": true,
       "pool": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
-      "data_provider": "0x69FA688f1Dc47d4B5d8029D5a35FB7a548310654",
-      "addresses_provider": "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb",
-      "liquidation_bonus_override": {}
+      "data_provider": "0x69FA688f1Dc47d4B5d8029D5a35FB7a548310654"
     },
     "radiant": {
-      "enabled": false,
+      "enabled": true,
       "pool": "0xF4B1486DD74D07706052A33d31d7c0AAFD0659E1",
-      "data_provider": "0x596B1b49645C4dAB4823BB5E2Be97C5ce4b09aeA",
-      "addresses_provider": "0x091d52CacE1edc5527C99cDCFA6937C1635330E4",
-      "liquidation_bonus_override": {}
+      "data_provider": "0x596B1b49645C4dAB4823BB5E2Be97C5ce4b09aeA"
     },
-    "silo": {
-      "enabled": false,
-      "pool": "0x0000000000000000000000000000000000000000",
-      "data_provider": "",
-      "addresses_provider": "",
-      "liquidation_bonus_override": {}
+    "compound_usdc": {
+      "enabled": true,
+      "pool": "0x9c4ec0939505182414272dfae26d2780aa150cb8"
     }
-  },
-  "flash_loan": {
-    "provider": "balancer",
-    "balancer_vault": "0xBA12222222228d8Ba445958a75a0704d566BF2C8",
-    "fee_bps": 0
-  },
-  "swap": {
-    "router": "0xE592427A0AEce92De3Edee1F18E0157C05861564",
-    "default_fee_tier": 3000,
-    "fee_tiers": {
-      "USDC-WETH": 500,
-      "WETH-USDC": 500,
-      "USDT-WETH": 500,
-      "USDT-USDC": 100,
-      "DAI-USDC": 100,
-      "WBTC-WETH": 3000,
-      "ARB-WETH": 3000,
-      "LINK-WETH": 3000,
-      "GMX-WETH": 10000
-    },
-    "slippage_bps": 50
   },
   "tokens": {
-    "USDC": {
-      "address": "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8",
-      "decimals": 6,
-      "liquidation_bonus": 0.05
-    },
-    "USDCe": {
-      "address": "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8",
-      "decimals": 6,
-      "liquidation_bonus": 0.05
-    },
-    "USDT": {
-      "address": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
-      "decimals": 6,
-      "liquidation_bonus": 0.05
-    },
-    "DAI": {
-      "address": "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1",
-      "decimals": 18,
-      "liquidation_bonus": 0.05
-    },
-    "WETH": {
-      "address": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
-      "decimals": 18,
-      "liquidation_bonus": 0.05
-    },
-    "WBTC": {
-      "address": "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f",
-      "decimals": 8,
-      "liquidation_bonus": 0.05
-    },
-    "ARB": {
-      "address": "0x912CE59144191C1204E64559FE8253a0e49E6548",
-      "decimals": 18,
-      "liquidation_bonus": 0.1
-    },
-    "LINK": {
-      "address": "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4",
-      "decimals": 18,
-      "liquidation_bonus": 0.075
-    },
-    "GMX": {
-      "address": "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a",
-      "decimals": 18,
-      "liquidation_bonus": 0.15
-    },
-    "weETH": {
-      "address": "0x35751007a407ca6FEFfE80b3cB397736D2cf4dbe",
-      "decimals": 18,
-      "liquidation_bonus": 0.075
-    },
-    "ezETH": {
-      "address": "0x2416092f143378750bb29b79eD961ab195CcEea5",
-      "decimals": 18,
-      "liquidation_bonus": 0.075
-    },
-    "wstETH": {
-      "address": "0x5979D7b546E38E414F7E9822514be443A4800529",
-      "decimals": 18,
-      "liquidation_bonus": 0.07
-    },
-    "rETH": {
-      "address": "0xEC70Dcb4A1EFa46b8F2D97C310C9c4790ba5ffA8",
-      "decimals": 18,
-      "liquidation_bonus": 0.075
-    }
+    "USDC": { "address": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", "decimals": 6, "liquidation_bonus": 0.05 },
+    "USDCe": { "address": "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8", "decimals": 6, "liquidation_bonus": 0.05 },
+    "WETH": { "address": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", "decimals": 18, "liquidation_bonus": 0.05 },
+    "ARB": { "address": "0x912CE59144191C1204E64559FE8253a0e49E6548", "decimals": 18, "liquidation_bonus": 0.10 }
   },
   "strategy": {
     "min_profit_usd": 20.0,
     "min_debt_usd": 300.0,
-    "max_debt_usd": 5000000.0,
-    "max_gas_usd": 5.0,
     "close_factor": 0.5,
-    "prioritize_high_bonus": true,
-    "zombie_queue": {
-      "enabled": true,
-      "entry_hf": 1.05,
-      "fire_hf": 1.0,
-      "poll_interval_seconds": 5
-    }
+    "zombie_queue": { "entry_hf": 1.05, "fire_hf": 1.0 }
   },
   "gas": {
     "max_fee_per_gas_gwei": 2.0,
-    "max_priority_fee_gwei": 0.2,
-    "gas_limit": 900000,
-    "gas_price_multiplier": 1.5
+    "max_priority_fee_gwei": 0.1,
+    "gas_limit": 1000000
   },
   "scanning": {
     "main_loop_interval_seconds": 20,
     "blocks_to_scan_for_borrowers": 1728000,
     "batch_size": 100,
-    "event_scan_chunk": 50000,
-    "use_websocket": false,
-    "_note_arbitrum_blocks": "Arbitrum = ~4 blocks/sec. 1 day = 345600 blocks. 50 days = 17280000."
+    "event_scan_chunk": 50000
   },
-  "oracle": {
-    "watch_chainlink": true,
-    "chainlink_feeds": {
-      "ETH_USD": "0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612",
-      "BTC_USD": "0x6ce185860a4963106506C203335A2910413708e9",
-      "ARB_USD": "0xb2A824043730FE05F3DA2efaFa1CBbe83fa548D7",
-      "LINK_USD": "0x86E53CF1B873786aC9Cc2ce1D567A64D7609ee5",
-      "GMX_USD": "0xDB98056FecFff59D032aB628337A4887110df3dB"
-    },
-    "price_drop_trigger_pct": 2.0
-  },
-  "notifications": {
-    "enabled": false,
-    "telegram_bot_token": "",
-    "telegram_chat_id": "",
-    "notify_on_liquidation": true,
-    "notify_on_error": true
-  },
-  "logging": {
-    "level": "INFO",
-    "file": "logs/bot.log",
-    "max_bytes": 10485760,
-    "backup_count": 5
-  },
-  "mode": "simulate"
+  "mode": "simulate",
+  "logging": { "level": "INFO", "file": "logs/bot.log", "max_bytes": 10485760, "backup_count": 5 }
 }

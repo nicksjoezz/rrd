@@ -69,27 +69,46 @@ def setup_logging() -> logging.Logger:
 logger = setup_logging()
 
 # ── Web3 ──────────────────────────────────────────────────────────────────────
+import threading
+
 _public_w3: Optional[Web3] = None
 _alchemy_w3: Optional[Web3] = None
+_rpc_lock = threading.RLock()
+_key_index = 0
 
 def get_public_web3() -> Web3:
     global _public_w3
-    if _public_w3 is None or not _public_w3.is_connected():
-        rpc = cfg("network", "rpc_http")
-        _public_w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 60}))
+    with _rpc_lock:
+        if _public_w3 is None or not _public_w3.is_connected():
+            rpc = cfg("network", "rpc_http") or "https://arb1.arbitrum.io/rpc"
+            _public_w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 60}))
     return _public_w3
 
 def get_alchemy_web3() -> Web3:
-    global _alchemy_w3
-    if _alchemy_w3 is None or not _alchemy_w3.is_connected():
-        key = load_config()["network"].get("alchemy_key", "")
-        if not key or key == "YOUR_ALCHEMY_KEY_HERE":
+    global _alchemy_w3, _key_index
+    with _rpc_lock:
+        if _alchemy_w3 is None or not _alchemy_w3.is_connected():
+            keys = cfg("network", "alchemy_keys")
+            if not keys:
+                key = cfg("network", "alchemy_key")
+                keys = [key] if key else []
+
+            if not keys or keys[0] == "YOUR_ALCHEMY_KEY_HERE":
+                return get_public_web3()
+
+            # Try keys until one works
+            for _ in range(len(keys)):
+                key = keys[_key_index % len(keys)]
+                rpc = key if key.startswith("http") else f"https://arb-mainnet.g.alchemy.com/v2/{key}"
+                try:
+                    w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 20}))
+                    if w3.is_connected():
+                        _alchemy_w3 = w3
+                        return _alchemy_w3
+                except: pass
+                _key_index += 1
+
             return get_public_web3()
-        rpc = key if key.startswith("http") else f"https://arb-mainnet.g.alchemy.com/v2/{key}"
-        try:
-            _alchemy_w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 30}))
-            if not _alchemy_w3.is_connected(): return get_public_web3()
-        except: return get_public_web3()
     return _alchemy_w3
 
 def get_web3() -> Web3: return get_alchemy_web3()
@@ -209,7 +228,15 @@ COMET_ABI = json.loads('''[
    "outputs":[{"name":"balance","type":"uint128"},{"name":"_reserved","type":"uint128"}]},
   {"name":"userBasic","type":"function","stateMutability":"view",
    "inputs":[{"name":"account","type":"address"}],
-   "outputs":[{"name":"principal","type":"int104"},{"name":"_reserved","type":"uint152"}]}
+   "outputs":[{"name":"principal","type":"int104"},{"name":"_reserved","type":"uint152"}]},
+  {"name":"numAssets","type":"function","stateMutability":"view",
+   "inputs":[],"outputs":[{"type":"uint8"}]},
+  {"name":"getAssetInfo","type":"function","stateMutability":"view",
+   "inputs":[{"name":"i","type":"uint8"}],
+   "outputs":[{"components":[{"internalType":"uint8","name":"offset","type":"uint8"},{"internalType":"address","name":"asset","type":"address"},{"internalType":"address","name":"priceFeed","type":"address"},{"internalType":"uint64","name":"scale","type":"uint64"},{"internalType":"uint64","name":"borrowCollateralFactor","type":"uint64"},{"internalType":"uint64","name":"liquidateCollateralFactor","type":"uint64"},{"internalType":"uint64","name":"liquidationFactor","type":"uint64"},{"internalType":"uint128","name":"supplyCap","type":"uint128"}],"internalType":"struct CometStructs.AssetInfo","name":"","type":"tuple"}]},
+  {"name":"getPrice","type":"function","stateMutability":"view",
+   "inputs":[{"name":"priceFeed","type":"address"}],
+   "outputs":[{"type":"uint256"}]}
 ]''')
 
 # ── Multicall3 (Arbitrum) ───────────────────────────────────────────────────

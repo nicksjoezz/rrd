@@ -131,30 +131,36 @@ def get_all_borrower_count() -> int:
 def upsert_position(pos: dict):
     conn = get_conn()
     try:
-        conn.execute(
-            """INSERT INTO positions
-               (address, protocol, health_factor, total_debt_usd, total_col_usd,
-                collateral_token, debt_token, last_updated)
-               VALUES (?,?,?,?,?,?,?,?)
-               ON CONFLICT(address, protocol)
-               DO UPDATE SET
-                 health_factor=excluded.health_factor,
-                 total_debt_usd=excluded.total_debt_usd,
-                 total_col_usd=excluded.total_col_usd,
-                 collateral_token=excluded.collateral_token,
-                 debt_token=excluded.debt_token,
-                 last_updated=excluded.last_updated""",
-            (
-                pos.get("user", "").lower(),
-                pos.get("protocol", ""),
-                pos.get("health_factor"),
-                pos.get("total_debt_usd"),
-                pos.get("total_col_usd"),
-                pos.get("collateral_token"),
-                pos.get("debt_token"),
-                int(time.time())
+        if pos.get("total_debt_usd", 0) <= 0:
+            conn.execute(
+                "DELETE FROM positions WHERE address=? AND protocol=?",
+                (pos.get("user", "").lower(), pos.get("protocol", ""))
             )
-        )
+        else:
+            conn.execute(
+                """INSERT INTO positions
+                   (address, protocol, health_factor, total_debt_usd, total_col_usd,
+                    collateral_token, debt_token, last_updated)
+                   VALUES (?,?,?,?,?,?,?,?)
+                   ON CONFLICT(address, protocol)
+                   DO UPDATE SET
+                     health_factor=excluded.health_factor,
+                     total_debt_usd=excluded.total_debt_usd,
+                     total_col_usd=excluded.total_col_usd,
+                     collateral_token=excluded.collateral_token,
+                     debt_token=excluded.debt_token,
+                     last_updated=excluded.last_updated""",
+                (
+                    pos.get("user", "").lower(),
+                    pos.get("protocol", ""),
+                    pos.get("health_factor"),
+                    pos.get("total_debt_usd"),
+                    pos.get("total_col_usd"),
+                    pos.get("collateral_token"),
+                    pos.get("debt_token"),
+                    int(time.time())
+                )
+            )
         conn.commit()
     finally:
         conn.close()

@@ -1,0 +1,5 @@
+2026-03-27 20:24:07 [INFO] liquidation_bot.zombie: [ZOMBIE] Loaded 1 positions
+2026-03-27 20:24:07 [INFO] liquidation_bot.monitor: Initialized aave_v3
+2026-03-27 20:24:07 [INFO] liquidation_bot.monitor: Initialized radiant
+2026-03-27 20:24:08 [ERROR] liquidation_bot.monitor: [compound_usdc] Failed to load assets
+2026-03-27 20:24:08 [INFO] liquidation_bot.monitor: Initialized compound_usdc

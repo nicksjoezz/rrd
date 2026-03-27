@@ -109,6 +109,18 @@ class AaveMonitor(BaseMonitor):
 class CompoundMonitor(BaseMonitor):
     def __init__(self, name: str, pool_addr: str):
         super().__init__(name, pool_addr); self.comet = self.w3.eth.contract(address=checksum(pool_addr), abi=COMET_ABI)
+        self.assets = []
+        try:
+            num = self.comet.functions.numAssets().call()
+            for i in range(num):
+                info = self.comet.functions.getAssetInfo(i).call()
+                self.assets.append({
+                    "address": info[1],
+                    "priceFeed": info[2],
+                    "scale": info[3],
+                    "liqFactor": info[5] / 1e18
+                })
+        except: logger.error(f"[{name}] Failed to load assets")
 
     def load_borrowers_from_events(self, from_block: int, to_block: int):
         w3 = get_public_web3(); chunk = 50000; new = set()
@@ -125,52 +137,74 @@ class CompoundMonitor(BaseMonitor):
 
     def scan_users(self, users: List[str], zombie_queue: Optional[ZombieQueue] = None) -> List[dict]:
         liq = []; mc = self.w3.eth.contract(address=MULTICALL3_ADDR, abi=MULTICALL3_ABI)
-        for i in range(0, len(users), 100):
-            chunk = users[i : i+100]
-            calls = [{"target": self.pool_addr, "callData": self.comet.encodeABI("isLiquidatable", [checksum(u)])} for u in chunk]
+        z_entry = cfg("strategy", "zombie_queue", "entry_hf") or 1.05
+
+        # We need prices for HF calculation
+        prices = {}
+        for a in self.assets:
+            try: prices[a["address"]] = self.comet.functions.getPrice(a["priceFeed"]).call() / 1e8
+            except: prices[a["address"]] = 0
+
+        for i in range(0, len(users), 50):
+            chunk = users[i : i+50]
+            calls = []
+            for u in chunk:
+                calls.append({"target": self.pool_addr, "callData": self.comet.encodeABI("userBasic", [checksum(u)])})
+                for a in self.assets:
+                    calls.append({"target": self.pool_addr, "callData": self.comet.encodeABI("userCollateral", [checksum(u), checksum(a["address"])])})
+
             try:
                 _, res = mc.functions.aggregate(calls).call()
-                for j, raw in enumerate(res):
-                    if self.w3.codec.decode(["bool"], raw)[0]:
-                        p = self._build_pos(chunk[j])
-                        if p: liq.append(p)
-            except: pass
+                ptr = 0
+                for u in chunk:
+                    basic = self.w3.codec.decode(["int104", "uint152"], res[ptr]); ptr += 1
+                    debt_raw = abs(basic[0]) if basic[0] < 0 else 0
+
+                    total_col_usd = 0; total_bor_cap_usd = 0; best_col = None; max_col_val = 0
+                    for a in self.assets:
+                        col_raw = self.w3.codec.decode(["uint128", "uint128"], res[ptr])[0]; ptr += 1
+                        if col_raw > 0:
+                            val_usd = (col_raw / a["scale"]) * prices[a["address"]]
+                            total_col_usd += val_usd
+                            total_bor_cap_usd += val_usd * a["liqFactor"]
+                            if val_usd > max_col_val:
+                                max_col_val = val_usd
+                                tokens = cfg("tokens") or {}
+                                bonus = 0.05
+                                for sym, info in tokens.items():
+                                    if info["address"].lower() == a["address"].lower(): bonus = info["liquidation_bonus"]; break
+                                best_col = (a["address"], bonus)
+
+                    if debt_raw > 0:
+                        # In Comet, HF = total_bor_cap_usd / debt_usd
+                        # But Comet prices are usually vs USD or indexed.
+                        # For simplicity, assume baseToken is 1 USD (it is for USDC Comet)
+                        debt_usd = debt_raw / 1e6 # USDC 6 decimals
+                        hf = total_bor_cap_usd / debt_usd if debt_usd > 0 else float('inf')
+
+                        if hf <= z_entry:
+                            p = self._build_pos_from_data(u, hf, debt_raw, total_col_usd, best_col)
+                            if p:
+                                if hf <= 1.0: liq.append(p)
+                                elif zombie_queue: zombie_queue.update(self.name, u, p)
+            except Exception as e: logger.debug(f"[{self.name}] scan_users batch error: {e}")
         return liq
 
-    def _build_pos(self, user: str) -> Optional[dict]:
+    def _build_pos_from_data(self, user: str, hf: float, debt: int, total_col_usd: float, best_col: tuple) -> Optional[dict]:
+        if not best_col: return None
         try:
-            base = self.comet.functions.baseToken().call(); tokens = cfg("tokens") or {}
-            base_token_contract = self.w3.eth.contract(address=checksum(base), abi=ERC20_ABI)
-            base_decimals = base_token_contract.functions.decimals().call()
-            base_symbol = base_token_contract.functions.symbol().call()
+            base = self.comet.functions.baseToken().call()
+            token_map = get_token_map()
+            col_info = token_map.get(best_col[0].lower(), {"symbol": "???", "liquidation_bonus": best_col[1]})
+            base_info = token_map.get(base.lower(), {"symbol": "USDC"})
 
-            mc = self.w3.eth.contract(address=MULTICALL3_ADDR, abi=MULTICALL3_ABI)
-            calls = []
-            assets = [info["address"] for s, info in tokens.items() if info["address"].lower() != base.lower()]
-            syms   = [s for s, info in tokens.items() if info["address"].lower() != base.lower()]
-            for a in assets:
-                calls.append({"target": self.pool_addr, "callData": self.comet.encodeABI("userCollateral", [checksum(user), checksum(a)])})
-            
-            _, res = mc.functions.aggregate(calls).call()
-            best_col = None; max_val = 0
-            for j, raw in enumerate(res):
-                bal = self.w3.codec.decode(["uint128", "uint128"], raw)[0]
-                if bal > 0:
-                    info = tokens[syms[j]]; val = bal / (10**info["decimals"])
-                    if val > max_val: max_val = val; best_col = (info["address"], syms[j], info["liquidation_bonus"])
-            
-            if best_col:
-                p_raw = self.comet.functions.userBasic(checksum(user)).call()[0]
-                debt = abs(p_raw) if p_raw < 0 else 0
-                if debt == 0: return None
-                return {
-                    "protocol": self.name, "user": user, "collateral_token": best_col[0], "collateral_symbol": best_col[1],
-                    "collateral_bonus": best_col[2], "debt_token": base, "debt_symbol": base_symbol,
-                    "debt_to_cover": debt, "health_factor": 0.99, "total_debt_usd": debt/(10**base_decimals), "total_col_usd": max_val,
-                    "pool_address": self.pool_addr, "swap_params": {}
-                }
-        except: pass
-        return None
+            return {
+                "protocol": self.name, "user": user, "collateral_token": best_col[0], "collateral_symbol": col_info["symbol"],
+                "collateral_bonus": col_info["liquidation_bonus"], "debt_token": base, "debt_symbol": base_info["symbol"],
+                "debt_to_cover": debt, "health_factor": hf, "total_debt_usd": debt/1e6, "total_col_usd": total_col_usd,
+                "pool_address": self.pool_addr, "swap_params": {}
+            }
+        except: return None
 
 class MultiProtocolMonitor:
     def __init__(self):
@@ -212,6 +246,10 @@ class MultiProtocolMonitor:
                 pos = m.scan_users(list(m._borrowers), self.zombie_queue)
                 all_pos.extend(pos)
             except Exception as e: logger.error(f"[{name}] Scan error: {e}")
+
+        # Deduplicate and filter zero-debt positions
+        all_pos = [p for p in all_pos if p.get("debt_to_cover", 0) > 0]
+
         for p in all_pos: self.velocity.record(p["protocol"], p["user"], p["health_factor"]); upsert_position(p)
         ready = self.zombie_queue.get_ready()
         for r in ready:
