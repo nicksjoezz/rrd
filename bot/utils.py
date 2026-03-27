@@ -28,10 +28,13 @@ def load_config() -> dict:
 
 def cfg(*keys):
     """Deep-get config values: cfg('strategy','min_profit_usd')"""
-    d = load_config()
-    for k in keys:
-        d = d[k]
-    return d
+    try:
+        d = load_config()
+        for k in keys:
+            d = d[k]
+        return d
+    except (KeyError, TypeError):
+        return None
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 def setup_logging() -> logging.Logger:
@@ -49,7 +52,6 @@ def setup_logging() -> logging.Logger:
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-    # File handler with rotation
     fh = logging.handlers.RotatingFileHandler(
         ROOT_DIR / log_cfg["file"],
         maxBytes=log_cfg["max_bytes"],
@@ -58,7 +60,6 @@ def setup_logging() -> logging.Logger:
     fh.setFormatter(fmt)
     logger.addHandler(fh)
 
-    # Console handler
     ch = logging.StreamHandler(sys.stdout)
     ch.setFormatter(fmt)
     logger.addHandler(ch)
@@ -76,8 +77,6 @@ def get_public_web3() -> Web3:
     if _public_w3 is None or not _public_w3.is_connected():
         rpc = cfg("network", "rpc_http")
         _public_w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 60}))
-        if not _public_w3.is_connected():
-            logger.warning(f"Public RPC connection failed: {rpc}")
     return _public_w3
 
 def get_alchemy_web3() -> Web3:
@@ -85,47 +84,24 @@ def get_alchemy_web3() -> Web3:
     if _alchemy_w3 is None or not _alchemy_w3.is_connected():
         key = load_config()["network"].get("alchemy_key", "")
         if not key or key == "YOUR_ALCHEMY_KEY_HERE":
-            return get_public_web3() # Fallback
-        
-        if key.startswith("http"):
-            rpc = key
-        else:
-            rpc = f"https://arb-mainnet.g.alchemy.com/v2/{key}"
-            
+            return get_public_web3()
+        rpc = key if key.startswith("http") else f"https://arb-mainnet.g.alchemy.com/v2/{key}"
         try:
             _alchemy_w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 30}))
-            if not _alchemy_w3.is_connected():
-                logger.warning(f"Alchemy RPC failed (check key: {rpc[:25]}...) -- using Public fallback")
-                return get_public_web3()
-        except Exception as e:
-            logger.error(f"Alchemy connection error: {e} (URL: {rpc[:25]}...)")
-            return get_public_web3()
+            if not _alchemy_w3.is_connected(): return get_public_web3()
+        except: return get_public_web3()
     return _alchemy_w3
 
-def get_web3() -> Web3:
-    """General connection — prefers Alchemy but stable."""
-    return get_alchemy_web3()
+def get_web3() -> Web3: return get_alchemy_web3()
 
 def get_account():
     try:
         pk = cfg("wallet", "private_key")
-        if not pk or pk == "YOUR_PRIVATE_KEY_HERE":
-            return None
+        if not pk or pk == "YOUR_PRIVATE_KEY_HERE": return None
         return Account.from_key(pk)
-    except Exception:
-        return None
+    except: return None
 
 # ── ABIs ──────────────────────────────────────────────────────────────────────
-BALANCER_VAULT_ABI = json.loads('''[
-  {"name":"flashLoan","type":"function","stateMutability":"nonpayable",
-   "inputs":[
-     {"name":"recipient","type":"address"},
-     {"name":"tokens","type":"address[]"},
-     {"name":"amounts","type":"uint256[]"},
-     {"name":"userData","type":"bytes"}
-   ],"outputs":[]}
-]''')
-
 AAVE_POOL_ABI = json.loads('''[
   {"name":"liquidationCall","type":"function","stateMutability":"nonpayable",
    "inputs":[
@@ -144,16 +120,7 @@ AAVE_POOL_ABI = json.loads('''[
      {"name":"currentLiquidationThreshold","type":"uint256"},
      {"name":"ltv","type":"uint256"},
      {"name":"healthFactor","type":"uint256"}
-   ]},
-  {"name":"Borrow","type":"event","inputs":[
-     {"name":"reserve","type":"address","indexed":true},
-     {"name":"user","type":"address","indexed":false},
-     {"name":"onBehalfOf","type":"address","indexed":true},
-     {"name":"amount","type":"uint256","indexed":false},
-     {"name":"interestRateMode","type":"uint8","indexed":false},
-     {"name":"borrowRate","type":"uint256","indexed":false},
-     {"name":"referralCode","type":"uint16","indexed":true}
-  ]}
+   ]}
 ]''')
 
 DATA_PROVIDER_ABI = json.loads('''[
@@ -207,12 +174,42 @@ LIQUIDATOR_CONTRACT_ABI = json.loads('''[
      {"name":"borrower","type":"address"},
      {"name":"debtAmount","type":"uint256"},
      {"name":"lendingPool","type":"address"},
-     {"name":"swapFee","type":"uint24"}
+     {"name":"swapFee","type":"uint24"},
+     {"name":"minProfit","type":"uint256"},
+     {"name":"protocol","type":"uint8"}
+   ],"outputs":[]},
+  {"name":"executeLiquidationMultiHop","type":"function","stateMutability":"nonpayable",
+   "inputs":[
+     {"name":"debtToken","type":"address"},
+     {"name":"collateralToken","type":"address"},
+     {"name":"borrower","type":"address"},
+     {"name":"debtAmount","type":"uint256"},
+     {"name":"lendingPool","type":"address"},
+     {"name":"swapPath","type":"bytes"},
+     {"name":"minProfit","type":"uint256"},
+     {"name":"protocol","type":"uint8"}
    ],"outputs":[]},
   {"name":"withdraw","type":"function","stateMutability":"nonpayable",
    "inputs":[{"name":"token","type":"address"}],"outputs":[]},
   {"name":"owner","type":"function","stateMutability":"view",
    "inputs":[],"outputs":[{"type":"address"}]}
+]''')
+
+COMET_ABI = json.loads('''[
+  {"name":"absorb","type":"function","stateMutability":"nonpayable",
+   "inputs":[{"name":"absorber","type":"address"},{"name":"accounts","type":"address[]"}],
+   "outputs":[]},
+  {"name":"baseToken","type":"function","stateMutability":"view",
+   "inputs":[],"outputs":[{"type":"address"}]},
+  {"name":"isLiquidatable","type":"function","stateMutability":"view",
+   "inputs":[{"name":"account","type":"address"}],
+   "outputs":[{"type":"bool"}]},
+  {"name":"userCollateral","type":"function","stateMutability":"view",
+   "inputs":[{"name":"account","type":"address"},{"name":"asset","type":"address"}],
+   "outputs":[{"name":"balance","type":"uint128"},{"name":"_reserved","type":"uint128"}]},
+  {"name":"userBasic","type":"function","stateMutability":"view",
+   "inputs":[{"name":"account","type":"address"}],
+   "outputs":[{"name":"principal","type":"int104"},{"name":"_reserved","type":"uint152"}]}
 ]''')
 
 # ── Multicall3 (Arbitrum) ───────────────────────────────────────────────────
@@ -221,57 +218,26 @@ MULTICALL3_ABI  = json.loads('[{"inputs":[{"components":[{"internalType":"addres
 
 # ── Token helpers ─────────────────────────────────────────────────────────────
 def get_token_map() -> dict:
-    """Returns {address_lower: {symbol, decimals, liquidation_bonus}}"""
-    tokens = cfg("tokens")
-    result = {}
-    for sym, info in tokens.items():
-        result[info["address"].lower()] = {
-            "symbol": sym,
-            "address": info["address"],
-            "decimals": info["decimals"],
-            "liquidation_bonus": info["liquidation_bonus"]
-        }
-    return result
+    tokens = cfg("tokens") or {}
+    return {info["address"].lower(): {"symbol": sym, "address": info["address"], "decimals": info["decimals"], "liquidation_bonus": info["liquidation_bonus"]} for sym, info in tokens.items()}
 
 def get_address_to_symbol() -> dict:
-    tokens = cfg("tokens")
+    tokens = cfg("tokens") or {}
     return {info["address"].lower(): sym for sym, info in tokens.items()}
 
 def get_swap_fee(collateral_addr: str, debt_addr: str) -> int:
-    """Return best Uniswap V3 fee tier for a token pair."""
-    a2s = get_address_to_symbol()
-    col  = a2s.get(collateral_addr.lower(), "")
-    debt = a2s.get(debt_addr.lower(), "")
-    fee_tiers = cfg("swap", "fee_tiers")
-    key1 = f"{col}-{debt}"
-    key2 = f"{debt}-{col}"
-    return fee_tiers.get(key1) or fee_tiers.get(key2) or cfg("swap", "default_fee_tier")
+    a2s = get_address_to_symbol(); col = a2s.get(collateral_addr.lower(), ""); debt = a2s.get(debt_addr.lower(), "")
+    fee_tiers = cfg("swap", "fee_tiers") or {}
+    return fee_tiers.get(f"{col}-{debt}") or fee_tiers.get(f"{debt}-{col}") or cfg("swap", "default_fee_tier") or 3000
 
-def checksum(addr: str) -> str:
-    return Web3.to_checksum_address(addr)
+def checksum(addr: str) -> str: return Web3.to_checksum_address(addr)
+def wei_to_usd_base(value: int) -> float: return value / 1e8
+def health_factor_float(hf_raw: int) -> float: return hf_raw / 1e18 if hf_raw < 1e50 else float("inf")
 
-def wei_to_usd_base(value: int) -> float:
-    """Convert Aave base units (8 decimals) to USD float."""
-    return value / 1e8
-
-def health_factor_float(hf_raw: int) -> float:
-    """Convert raw health factor (18 decimals) to float."""
-    if hf_raw >= (2**256 - 1) // 10:
-        return float("inf")
-    return hf_raw / 1e18
-
-# ── Telegram notifications (optional) ────────────────────────────────────────
 def notify(message: str):
     try:
-        notif_cfg = cfg("notifications")
-        if not notif_cfg["enabled"]:
-            return
+        notif = cfg("notifications")
+        if not notif or not notif["enabled"]: return
         import requests
-        token   = notif_cfg["telegram_bot_token"]
-        chat_id = notif_cfg["telegram_chat_id"]
-        if not token or not chat_id:
-            return
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        requests.post(url, json={"chat_id": chat_id, "text": message}, timeout=5)
-    except Exception:
-        pass
+        requests.post(f"https://api.telegram.org/bot{notif['telegram_bot_token']}/sendMessage", json={"chat_id": notif["telegram_chat_id"], "text": message}, timeout=5)
+    except: pass
