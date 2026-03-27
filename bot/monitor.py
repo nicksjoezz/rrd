@@ -70,26 +70,39 @@ class MorphoBlueMonitor:
         Morpho Supply (topic0: 0x4f128c...90) or Borrow.
         We scan Borrow events.
         """
-        w3 = get_web3()
+        # Always use public RPC for log discovery to avoid Alchemy tier limits
+        w3 = get_public_web3()
         # Borrow event: Borrow(bytes32 indexed id, address caller, address indexed onBehalfOf,
         #   address receiver, uint256 assets, uint256 shares)
         new_borrowers = set()
         chunk = cfg("scanning", "event_scan_chunk")
 
         total_reqs = (to_block - from_block) // chunk + 1
+        logger.info(f"[{self.name}] Discovery scan: {from_block:,} -> {to_block:,} ({total_reqs} chunks)")
+
         for i, start in enumerate(range(from_block, to_block, chunk), 1):
             end = min(start + chunk - 1, to_block)
             try:
-                if i % 10 == 0 or i == 1 or i == total_reqs:
+                if i % 50 == 0 or i == 1 or i == total_reqs:
                     pct = (i / total_reqs) * 100
                     logger.info(f"[{self.name}] Progress: {pct:.1f}%  |  Borrowers found: {len(new_borrowers)}")
 
-                logs = w3.eth.get_logs({
-                    "address": checksum(self.pool_addr),
-                    "topics": [self.borrow_topic],
-                    "fromBlock": start,
-                    "toBlock": end,
-                })
+                # Retry logic for public RPC
+                logs = []
+                for attempt in range(3):
+                    try:
+                        logs = w3.eth.get_logs({
+                            "address": checksum(self.pool_addr),
+                            "topics": [self.borrow_topic],
+                            "fromBlock": start,
+                            "toBlock": end,
+                        })
+                        break
+                    except Exception as e:
+                        if attempt == 2:
+                            logger.warning(f"[{self.name}] Log chunk {start}-{end} failed after 3 attempts: {e}")
+                        time.sleep(1)
+
                 batch_found = []
                 for log in logs:
                     topics = log.get("topics", [])
@@ -196,14 +209,15 @@ class SiloV2Monitor:
         """
         Scan Borrow events for each Silo.
         """
-        w3 = get_web3()
+        # Always use public RPC for log discovery to avoid Alchemy tier limits
+        w3 = get_public_web3()
 
         if not self._silo_addresses:
             try:
+                # Silo V2 Factory on Arbitrum
                 self._silo_addresses = call_with_retry(self.factory.functions.getSilos)
                 logger.info(f"[{self.name}] Found {len(self._silo_addresses)} silos from factory")
-            except Exception as e:
-                logger.error(f"[{self.name}] Failed to get silos from factory {self.factory_addr}: {e}")
+            except Exception:
                 # Fallback: commonly used silos if factory fails
                 self._silo_addresses = [
                     "0x27D560032eB0661765cE7E36C289F43881B7a372", # USDC
@@ -217,18 +231,33 @@ class SiloV2Monitor:
 
         active_silos = self._silo_addresses[:20]
         total_silos = len(active_silos)
+        logger.info(f"[{self.name}] Discovery scan: {from_block:,} -> {to_block:,} across {total_silos} silos")
 
         for idx, silo_addr in enumerate(active_silos, 1):
-            logger.info(f"[{self.name}] Scanning Silo {idx}/{total_silos}: {silo_addr[:10]}...")
-            for start in range(from_block, to_block, chunk):
+            total_reqs = (to_block - from_block) // chunk + 1
+            for i, start in enumerate(range(from_block, to_block, chunk), 1):
                 end = min(start + chunk - 1, to_block)
                 try:
-                    logs = w3.eth.get_logs({
-                        "address": checksum(silo_addr),
-                        "topics": [self.borrow_topic],
-                        "fromBlock": start,
-                        "toBlock": end,
-                    })
+                    if i % 100 == 0 or i == 1 or i == total_reqs:
+                        pct = (i / total_reqs) * 100
+                        logger.info(f"[{self.name}] Silo {idx}/{total_silos} Progress: {pct:.1f}%  |  Borrowers found: {len(new_borrowers)}")
+
+                    # Retry logic for public RPC
+                    logs = []
+                    for attempt in range(3):
+                        try:
+                            logs = w3.eth.get_logs({
+                                "address": checksum(silo_addr),
+                                "topics": [self.borrow_topic],
+                                "fromBlock": start,
+                                "toBlock": end,
+                            })
+                            break
+                        except Exception as e:
+                            if attempt == 2:
+                                logger.warning(f"[{self.name}] Silo {silo_addr[:10]} chunk {start}-{end} failed: {e}")
+                            time.sleep(1)
+
                     batch_found = []
                     for log in logs:
                         topics = log.get("topics", [])
@@ -338,24 +367,37 @@ class CompoundIIIMonitor:
         """
         Compound III Supply event
         """
-        w3 = get_web3()
+        # Always use public RPC for log discovery to avoid Alchemy tier limits
+        w3 = get_public_web3()
         chunk = cfg("scanning", "event_scan_chunk")
         new_borrowers = set()
 
         total_reqs = (to_block - from_block) // chunk + 1
+        logger.info(f"[{self.name}] Discovery scan: {from_block:,} -> {to_block:,} ({total_reqs} chunks)")
+
         for i, start in enumerate(range(from_block, to_block, chunk), 1):
             end = min(start + chunk - 1, to_block)
             try:
-                if i % 10 == 0 or i == 1 or i == total_reqs:
+                if i % 50 == 0 or i == 1 or i == total_reqs:
                     pct = (i / total_reqs) * 100
                     logger.info(f"[{self.name}] Progress: {pct:.1f}%  |  Borrowers found: {len(new_borrowers)}")
 
-                logs = w3.eth.get_logs({
-                    "address": checksum(self.pool_addr),
-                    "topics": [self.borrow_topic],
-                    "fromBlock": start,
-                    "toBlock": end,
-                })
+                # Retry logic for public RPC
+                logs = []
+                for attempt in range(3):
+                    try:
+                        logs = w3.eth.get_logs({
+                            "address": checksum(self.pool_addr),
+                            "topics": [self.borrow_topic],
+                            "fromBlock": start,
+                            "toBlock": end,
+                        })
+                        break
+                    except Exception as e:
+                        if attempt == 2:
+                            logger.warning(f"[{self.name}] Log chunk {start}-{end} failed after 3 attempts: {e}")
+                        time.sleep(1)
+
                 batch_found = []
                 for log in logs:
                     topics = log.get("topics", [])
@@ -478,7 +520,8 @@ class ProtocolMonitor:
         Raw eth_getLogs bypasses all ABI decoding — onBehalfOf lives in topics[2]
         as a standard 32-byte indexed address, which we read directly.
         """
-        w3    = get_web3()
+        # Always use public RPC for log discovery to avoid Alchemy tier limits
+        w3    = get_public_web3()
         chunk = cfg("scanning", "event_scan_chunk")
         # Use protocol-specific topic0
         new_borrowers = set()
@@ -489,16 +532,26 @@ class ProtocolMonitor:
         for i, start in enumerate(range(from_block, to_block, chunk), 1):
             end = min(start + chunk - 1, to_block)
             try:
-                if i % 10 == 0 or i == 1 or i == total_reqs:
+                if i % 50 == 0 or i == 1 or i == total_reqs:
                     pct = (i / total_reqs) * 100
                     logger.info(f"[{self.name}] Progress: {pct:.1f}%  |  Borrowers found: {len(new_borrowers)}")
 
-                logs = w3.eth.get_logs({
-                    "address":   w3.to_checksum_address(self.pool_addr),
-                    "topics":    [self.borrow_topic],
-                    "fromBlock": start,
-                    "toBlock":   end,
-                })
+                # Retry logic for public RPC
+                logs = []
+                for attempt in range(3):
+                    try:
+                        logs = w3.eth.get_logs({
+                            "address":   w3.to_checksum_address(self.pool_addr),
+                            "topics":    [self.borrow_topic],
+                            "fromBlock": start,
+                            "toBlock":   end,
+                        })
+                        break
+                    except Exception as e:
+                        if attempt == 2:
+                            logger.warning(f"[{self.name}] Log chunk {start}-{end} failed after 3 attempts: {e}")
+                        time.sleep(1)
+
                 batch_found = []
                 for log in logs:
                     topics = log.get("topics", [])
@@ -854,21 +907,7 @@ class MultiProtocolMonitor:
         current_block = w3.eth.block_number
         ARBITRUM_50_DAYS = 17_280_000
 
-        tasks = []
-        for name, monitor in self.monitors.items():
-            monitor.load_borrowers_from_db()
-            last_block = get_last_scan_block(name)
-
-            if last_block == 0:
-                from_block = max(0, current_block - ARBITRUM_50_DAYS)
-                logger.info(f"[{name}] First run -- scanning last 50 days")
-            else:
-                from_block = last_block + 1
-
-            if from_block < current_block:
-                tasks.append(self._load_monitor_events(name, monitor, from_block, current_block))
-
-        # Load zombies
+        # Load zombies first to ensure they are tracked
         zombies = self.zombie_queue.get_watching()
         for z in zombies:
             proto = z.get("protocol")
@@ -876,12 +915,38 @@ class MultiProtocolMonitor:
             if proto and user and proto in self.monitors:
                 self.monitors[proto]._borrowers.add(user.lower())
 
+        tasks = []
+        for name, monitor in self.monitors.items():
+            monitor.load_borrowers_from_db()
+            last_block = get_last_scan_block(name)
+
+            if last_block == 0:
+                from_block = max(0, current_block - ARBITRUM_50_DAYS)
+                logger.info(f"[{name}] First run -- scanning last 50 days ({from_block:,} -> {current_block:,})")
+            else:
+                from_block = last_block + 1
+                logger.info(f"[{name}] Incremental: {from_block:,} -> {current_block:,}")
+
+            if from_block < current_block:
+                tasks.append(self._load_monitor_events(name, monitor, from_block, current_block))
+
         if tasks:
             try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(asyncio.gather(*tasks))
-                loop.close()
+                # Use current loop if available (should be main thread or background thread)
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                if loop.is_running():
+                    # If we are in a thread where a loop is already running (unlikely for main.py startup)
+                    # we would need to run_coroutine_threadsafe.
+                    # But load_all_borrowers is called from _bot_loop thread.
+                    # _bot_loop is a standard thread.
+                    loop.run_until_complete(asyncio.gather(*tasks))
+                else:
+                    loop.run_until_complete(asyncio.gather(*tasks))
             except Exception as e:
                 logger.error(f"Async discovery failed: {e}")
 
