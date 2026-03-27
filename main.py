@@ -121,6 +121,7 @@ def _bot_loop():
 
         # ── 24/7 scan loop ────────────────────────────────────────────────────
         cycle = 0
+        last_zombie_check = 0
         while _bot_running.is_set():
             cycle += 1
             _bot_stats["cycle"] = cycle
@@ -149,6 +150,15 @@ def _bot_loop():
 
                 # Check oracle price feeds for large moves
                 oracle.check_all_feeds()
+
+                # High-priority zombie re-check
+                z_interval = cfg("strategy", "zombie_queue", "poll_interval_seconds")
+                if time.time() - last_zombie_check >= z_interval:
+                    z_ready = monitor.scan_zombies()
+                    if z_ready:
+                        logger.info(f"[ZOMBIE] {len(z_ready)} positions ready! Executing...")
+                        executor.execute_batch(z_ready)
+                    last_zombie_check = time.time()
 
                 # Priority re-check wallets with recent on-chain activity
                 hot = streamer.get_and_clear_hotlist()

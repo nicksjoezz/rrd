@@ -313,7 +313,6 @@ class ProtocolMonitor:
                     if dec[1] == 0: continue
                     
                     hf = health_factor_float(dec[5])
-                    if hf > zombie_entry: continue
                     
                     pos = self.check_position(user, account_data=dec)
                     if pos:
@@ -326,6 +325,11 @@ class ProtocolMonitor:
                                 liquidatable.append(pos)
                         elif hf <= 1.0:
                             liquidatable.append(pos)
+                    else:
+                        # If pos is None, it's either healthy or debt-free
+                        # We should still notify zombie_queue so it can remove recovered positions
+                        if zombie_queue:
+                            zombie_queue.update(self.name, user, {"health_factor": hf})
                             
             except Exception as e:
                 logger.error(f"[{self.name}] Multicall batch error: {e}")
@@ -495,6 +499,32 @@ class MultiProtocolMonitor:
         self.velocity.cleanup()
 
         return all_positions
+
+    def scan_zombies(self) -> List[dict]:
+        """
+        High-priority scan specifically for wallets in the zombie queue.
+        Ensures their HF is always up-to-date in the dashboard and database.
+        Returns list of newly ready liquidations.
+        """
+        zombies = self.zombie_queue.get_watching()
+        if not zombies: return []
+
+        # Group by protocol
+        by_proto = {}
+        for z in zombies:
+            p = z.get("protocol")
+            if p not in by_proto: by_proto[p] = []
+            by_proto[p].append(z.get("user"))
+
+        all_ready = []
+        for proto_name, users in by_proto.items():
+            monitor = self.monitors.get(proto_name)
+            if not monitor: continue
+
+            ready = monitor.scan_users(users, zombie_queue=self.zombie_queue)
+            all_ready.extend(ready)
+
+        return all_ready
 
     def get_stats(self) -> dict:
         total = sum(m.get_borrower_count() for m in self.monitors.values())
