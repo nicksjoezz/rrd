@@ -50,10 +50,12 @@ class MorphoBlueMonitor:
     Monitors Morpho Blue markets.
     Single contract for all markets.
     """
+    BORROW_TOPIC = "0x013a3e29f3796d833454b5093e0315183495d015c92c89280145c360098df156"
 
     def __init__(self, name: str, pool_addr: str):
         self.name = name
         self.pool_addr = pool_addr
+        self.borrow_topic = self.BORROW_TOPIC
         self._borrowers: set = set()
 
         w3 = get_web3()
@@ -71,7 +73,6 @@ class MorphoBlueMonitor:
         w3 = get_web3()
         # Borrow event: Borrow(bytes32 indexed id, address caller, address indexed onBehalfOf,
         #   address receiver, uint256 assets, uint256 shares)
-        BORROW_TOPIC = "0x013a3e29f3796d833454b5093e0315183495d015c92c89280145c360098df156"
         new_borrowers = set()
         chunk = cfg("scanning", "event_scan_chunk")
 
@@ -80,7 +81,7 @@ class MorphoBlueMonitor:
             try:
                 logs = w3.eth.get_logs({
                     "address": checksum(self.pool_addr),
-                    "topics": [BORROW_TOPIC],
+                    "topics": [self.borrow_topic],
                     "fromBlock": start,
                     "toBlock": end,
                 })
@@ -168,10 +169,12 @@ class SiloV2Monitor:
     Monitors Silo Finance V2 markets.
     Each Silo is isolated. We enumerate all silos from the factory.
     """
+    BORROW_TOPIC = "0x312a5e5e1079f5dda4e95dbbd0b908b291fd5b992ef22073643ab691572c5b52"
 
     def __init__(self, name: str, factory_addr: str):
         self.name = name
         self.factory_addr = factory_addr
+        self.borrow_topic = self.BORROW_TOPIC
         self._silo_addresses = []
         self._borrowers: set = set()
 
@@ -187,10 +190,8 @@ class SiloV2Monitor:
     def load_borrowers_from_events(self, from_block: int, to_block: int, on_batch_found=None):
         """
         Scan Borrow events for each Silo.
-        Silo V2 Borrow topic: 0x312a5e5e1079f5dda4e95dbbd0b908b291fd5b992ef22073643ab691572c5b52
         """
         w3 = get_web3()
-        BORROW_TOPIC = "0x312a5e5e1079f5dda4e95dbbd0b908b291fd5b992ef22073643ab691572c5b52"
 
         if not self._silo_addresses:
             try:
@@ -211,7 +212,7 @@ class SiloV2Monitor:
                 try:
                     logs = w3.eth.get_logs({
                         "address": checksum(silo_addr),
-                        "topics": [BORROW_TOPIC],
+                        "topics": [self.borrow_topic],
                         "fromBlock": start,
                         "toBlock": end,
                     })
@@ -302,10 +303,12 @@ class CompoundIIIMonitor:
     Monitors a Compound III (Comet) market.
     Compound III uses a simplified model where isLiquidatable() returns a boolean.
     """
+    SUPPLY_TOPIC = "0xd6d480d5b3068db003533b170d67561494d72e3bf9fa40a266471351ebba9e16"
 
     def __init__(self, name: str, pool_addr: str):
         self.name = name
         self.pool_addr = pool_addr
+        self.borrow_topic = self.SUPPLY_TOPIC
         self._borrowers: set = set()
 
         w3 = get_web3()
@@ -320,11 +323,10 @@ class CompoundIIIMonitor:
 
     def load_borrowers_from_events(self, from_block: int, to_block: int, on_batch_found=None):
         """
-        Compound III Supply event (topic0: 0xd6d480d5b3068db003533b170d67561494d72e3bf9fa40a266471351ebba9e16)
+        Compound III Supply event
         """
         w3 = get_web3()
         chunk = cfg("scanning", "event_scan_chunk")
-        SUPPLY_TOPIC = "0xd6d480d5b3068db003533b170d67561494d72e3bf9fa40a266471351ebba9e16"
         new_borrowers = set()
 
         total_reqs = (to_block - from_block) // chunk + 1
@@ -333,7 +335,7 @@ class CompoundIIIMonitor:
             try:
                 logs = w3.eth.get_logs({
                     "address": checksum(self.pool_addr),
-                    "topics": [SUPPLY_TOPIC],
+                    "topics": [self.borrow_topic],
                     "fromBlock": start,
                     "toBlock": end,
                 })
@@ -778,28 +780,31 @@ class MultiProtocolMonitor:
             topic = AAVE_V3_BORROW
 
             if ptype == "compound_iii":
-                self.monitors[name] = CompoundIIIMonitor(
+                monitor = CompoundIIIMonitor(
                     name=name,
                     pool_addr=pool_addr
                 )
             elif ptype == "silo_v2":
-                self.monitors[name] = SiloV2Monitor(
+                monitor = SiloV2Monitor(
                     name=name,
                     factory_addr=pcfg.get("factory", "")
                 )
             elif ptype == "morpho_blue":
-                self.monitors[name] = MorphoBlueMonitor(
+                monitor = MorphoBlueMonitor(
                     name=name,
                     pool_addr=pool_addr
                 )
             else:
-                self.monitors[name] = ProtocolMonitor(
+                monitor = ProtocolMonitor(
                     name=name,
                     pool_addr=pool_addr,
                     data_provider_addr=dp_addr,
                     borrow_topic=topic
                 )
-            logger.info(f"Initialized protocol monitor: {name} (topic: {topic[:10]}...)")
+
+            self.monitors[name] = monitor
+            actual_topic = getattr(monitor, "borrow_topic", "unknown")
+            logger.info(f"Initialized protocol monitor: {name} (topic: {str(actual_topic)[:10]}...)")
 
     async def _load_monitor_events(self, name, monitor, from_block, to_block):
         # Streaming callback: verifies borrowers as they are found
@@ -1042,17 +1047,19 @@ class MultiProtocolMonitor:
             topic = AAVE_V3_BORROW
 
             if ptype == "compound_iii":
-                self.monitors[name] = CompoundIIIMonitor(name=name, pool_addr=pool_addr)
+                monitor = CompoundIIIMonitor(name=name, pool_addr=pool_addr)
             elif ptype == "silo_v2":
-                self.monitors[name] = SiloV2Monitor(name=name, factory_addr=factory_addr)
+                monitor = SiloV2Monitor(name=name, factory_addr=factory_addr)
             elif ptype == "morpho_blue":
-                self.monitors[name] = MorphoBlueMonitor(name=name, pool_addr=pool_addr)
+                monitor = MorphoBlueMonitor(name=name, pool_addr=pool_addr)
             else:
-                self.monitors[name] = ProtocolMonitor(
+                monitor = ProtocolMonitor(
                     name=name, pool_addr=pool_addr,
                     data_provider_addr=dp_addr, borrow_topic=topic
                 )
 
-            logger.info(f"Dynamically initialized protocol monitor: {name}")
+            self.monitors[name] = monitor
+            actual_topic = getattr(monitor, "borrow_topic", "unknown")
+            logger.info(f"Dynamically initialized protocol monitor: {name} (topic: {str(actual_topic)[:10]}...)")
             # Load cached borrowers for the newly added protocol
             self.monitors[name].load_borrowers_from_db()

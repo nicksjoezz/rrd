@@ -72,7 +72,7 @@ logger = setup_logging()
 _public_w3: Optional[Web3] = None
 _alchemy_w3_pool = []
 _alchemy_index = 0
-_alchemy_lock = threading.Lock()
+_alchemy_lock = threading.RLock()
 
 def get_public_web3() -> Web3:
     global _public_w3
@@ -119,18 +119,19 @@ def get_alchemy_web3() -> Web3:
 
     # Rotate with lock for thread safety
     with _alchemy_lock:
-        _alchemy_index = (_alchemy_index + 1) % len(_alchemy_w3_pool)
-        w3 = _alchemy_w3_pool[_alchemy_index]
+        # Loop through all available Alchemy nodes to find a working one
+        for _ in range(len(_alchemy_w3_pool)):
+            _alchemy_index = (_alchemy_index + 1) % len(_alchemy_w3_pool)
+            w3 = _alchemy_w3_pool[_alchemy_index]
 
-        # Check connection occasionally inside lock or before return
-        if not w3.is_connected():
+            # Use short timeout for connection check
+            if w3.is_connected():
+                return w3
+
             logger.warning(f"Alchemy node {_alchemy_index} unresponsive, trying next...")
-            # Recursive call will re-acquire lock, fine for this scale
-            if len(_alchemy_w3_pool) > 1:
-                return get_alchemy_web3()
-            return get_public_web3()
 
-        return w3
+        # If all Alchemy nodes fail, fallback to public
+        return get_public_web3()
 
 def _get_raw_alchemy_web3() -> Web3:
     """Internal helper to get a Web3 without rotation, for testing."""

@@ -149,7 +149,7 @@
   },
   "scanning": {
     "main_loop_interval_seconds": 20,
-    "blocks_to_scan_for_borrowers": 1728000,
+    "blocks_to_scan_for_borrowers": 17280000,
     "batch_size": 100,
     "event_scan_chunk": 50000,
     "use_websocket": false,
