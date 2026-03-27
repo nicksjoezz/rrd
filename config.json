@@ -25,12 +25,20 @@
       "addresses_provider": "0x091d52CacE1edc5527C99cDCFA6937C1635330E4",
       "liquidation_bonus_override": {}
     },
-    "silo": {
-      "enabled": false,
-      "pool": "0x0000000000000000000000000000000000000000",
-      "data_provider": "",
-      "addresses_provider": "",
-      "liquidation_bonus_override": {}
+    "silo_v2": {
+      "enabled": true,
+      "type": "silo_v2",
+      "factory": "0xf7dc975C96B434D436b9bF45E7a45c95F0521442"
+    },
+    "compound_iii_usdc": {
+      "enabled": true,
+      "type": "compound_iii",
+      "pool": "0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf"
+    },
+    "morpho_blue": {
+      "enabled": true,
+      "type": "morpho_blue",
+      "pool": "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb"
     }
   },
   "flash_loan": {

@@ -1,22 +1,6 @@
-2026-03-26 21:57:24 [INFO] liquidation_bot.monitor: Initialized protocol monitor: aave_v3 (topic: 0xb3d08482...)
-2026-03-26 21:57:44 [INFO] liquidation_bot.zombie: [ZOMBIE] Loaded 1 positions from zombies.json
-2026-03-26 21:57:45 [INFO] liquidation_bot.monitor: Initialized protocol monitor: aave_v3 (topic: 0xb3d08482...)
-2026-03-26 21:58:09 [INFO] liquidation_bot.zombie: [ZOMBIE] Loaded 1 positions from zombies.json
-2026-03-26 21:58:09 [INFO] liquidation_bot.monitor: Initialized protocol monitor: aave_v3 (topic: 0xb3d08482...)
-2026-03-26 22:06:06 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
-2026-03-26 22:06:06 [INFO] liquidation_bot.zombie: [ZOMBIE] Loaded 1 positions from zombies.json
-2026-03-26 22:06:06 [INFO] liquidation_bot.monitor: Initialized protocol monitor: aave_v3 (topic: 0xb3d08482...)
-2026-03-26 22:06:50 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
-2026-03-26 22:06:50 [INFO] liquidation_bot.zombie: [ZOMBIE] Loaded 1 positions from zombies.json
-2026-03-26 22:06:50 [INFO] liquidation_bot.monitor: Initialized protocol monitor: aave_v3 (topic: 0xb3d08482...)
-2026-03-26 22:07:47 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
-2026-03-26 22:07:47 [INFO] liquidation_bot.zombie: [ZOMBIE] Loaded 1 positions from zombies.json
-2026-03-26 22:07:48 [INFO] liquidation_bot.monitor: Initialized protocol monitor: aave_v3 (topic: 0xb3d08482...)
-2026-03-26 22:26:46 [INFO] liquidation_bot.zombie: [ZOMBIE] Loaded 1 positions from zombies.json
-2026-03-26 22:26:46 [INFO] liquidation_bot.monitor: Initialized protocol monitor: aave_v3 (topic: 0xb3d08482...)
-2026-03-26 22:27:05 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
-2026-03-26 22:27:05 [INFO] liquidation_bot.zombie: [ZOMBIE] Loaded 1 positions from zombies.json
-2026-03-26 22:27:05 [INFO] liquidation_bot.monitor: Initialized protocol monitor: aave_v3 (topic: 0xb3d08482...)
-2026-03-26 22:31:08 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
-2026-03-26 22:31:08 [INFO] liquidation_bot.zombie: [ZOMBIE] Loaded 1 positions from zombies.json
-2026-03-26 22:31:08 [INFO] liquidation_bot.monitor: Initialized protocol monitor: aave_v3 (topic: 0xb3d08482...)
+2026-03-27 10:28:16 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
+2026-03-27 10:28:16 [INFO] liquidation_bot.zombie: [ZOMBIE] Loaded 0 positions from zombies.json
+2026-03-27 10:28:16 [INFO] liquidation_bot.monitor: Initialized protocol monitor: aave_v3 (topic: 0xb3d08482...)
+2026-03-27 10:28:16 [INFO] liquidation_bot.monitor: Initialized protocol monitor: silo_v2 (topic: 0xb3d08482...)
+2026-03-27 10:28:17 [INFO] liquidation_bot.monitor: Initialized protocol monitor: compound_iii_usdc (topic: 0xb3d08482...)
+2026-03-27 10:28:17 [INFO] liquidation_bot.monitor: Initialized protocol monitor: morpho_blue (topic: 0xb3d08482...)

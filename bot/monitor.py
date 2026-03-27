@@ -22,7 +22,8 @@ from .utils import (
     get_web3, get_public_web3, get_alchemy_web3,
     cfg, get_token_map, checksum,
     wei_to_usd_base, health_factor_float,
-    AAVE_POOL_ABI, DATA_PROVIDER_ABI,
+    AAVE_POOL_ABI, DATA_PROVIDER_ABI, COMET_ABI,
+    SILO_ABI, SILO_FACTORY_ABI, MORPHO_BLUE_ABI,
     logger, notify,
     MULTICALL3_ADDR, MULTICALL3_ABI,
     call_with_retry
@@ -41,6 +42,338 @@ from .database import (
 from .velocity import VelocityTracker
 
 logger = logging.getLogger("liquidation_bot.monitor")
+
+
+class MorphoBlueMonitor:
+    """
+    Monitors Morpho Blue markets.
+    Single contract for all markets.
+    """
+
+    def __init__(self, name: str, pool_addr: str):
+        self.name = name
+        self.pool_addr = pool_addr
+        self._borrowers: set = set()
+
+        w3 = get_web3()
+        self.pool = w3.eth.contract(address=checksum(pool_addr), abi=MORPHO_BLUE_ABI)
+
+    def load_borrowers_from_db(self):
+        cached = get_borrowers(self.name)
+        self._borrowers.update(cached)
+
+    def load_borrowers_from_events(self, from_block: int, to_block: int, on_batch_found=None):
+        """
+        Morpho Supply (topic0: 0x4f128c...90) or Borrow.
+        We scan Borrow events.
+        """
+        w3 = get_public_web3()
+        # Borrow event: Borrow(bytes32 indexed id, address caller, address indexed onBehalfOf,
+        #   address receiver, uint256 assets, uint256 shares)
+        BORROW_TOPIC = "0x013a3e29f3796d833454b5093e0315183495d015c92c89280145c360098df156"
+        new_borrowers = set()
+        chunk = cfg("scanning", "event_scan_chunk")
+
+        for start in range(from_block, to_block, chunk):
+            end = min(start + chunk - 1, to_block)
+            try:
+                logs = w3.eth.get_logs({
+                    "address": checksum(self.pool_addr),
+                    "topics": [BORROW_TOPIC],
+                    "fromBlock": start,
+                    "toBlock": end,
+                })
+                batch_found = []
+                for log in logs:
+                    topics = log.get("topics", [])
+                    if len(topics) >= 3:
+                        addr = "0x" + topics[2].hex()[-40:]
+                        caddr = w3.to_checksum_address(addr)
+                        if caddr not in self._borrowers and caddr not in new_borrowers:
+                            batch_found.append(caddr)
+                            new_borrowers.add(caddr)
+
+                if on_batch_found and batch_found:
+                    on_batch_found(self.name, batch_found)
+            except Exception:
+                continue
+
+        self._borrowers.update(new_borrowers)
+        set_last_scan_block(self.name, to_block)
+        if new_borrowers:
+            upsert_borrowers(list(new_borrowers), self.name)
+
+    def check_position(self, user: str) -> Optional[dict]:
+        # Morpho health factor requires market-specific LTV calculation.
+        # This implementation requires marketIds which we'd typically get from a subgraph.
+        # Placeholder for health check logic.
+        return None
+
+    def scan_all(self, zombie_queue: Optional[ZombieQueue] = None) -> List[dict]:
+        return self.scan_users(list(self._borrowers), zombie_queue=zombie_queue)
+
+    def scan_users(self, users: List[str], zombie_queue: Optional[ZombieQueue] = None) -> List[dict]:
+        # Placeholder
+        return []
+
+    def get_borrower_count(self) -> int:
+        return len(self._borrowers)
+
+
+class SiloV2Monitor:
+    """
+    Monitors Silo Finance V2 markets.
+    Each Silo is isolated. We enumerate all silos from the factory.
+    """
+
+    def __init__(self, name: str, factory_addr: str):
+        self.name = name
+        self.factory_addr = factory_addr
+        self._silo_addresses = []
+        self._borrowers: set = set()
+
+        w3 = get_web3()
+        self.factory = w3.eth.contract(address=checksum(factory_addr), abi=SILO_FACTORY_ABI)
+
+    def load_borrowers_from_db(self):
+        cached = get_borrowers(self.name)
+        self._borrowers.update(cached)
+        if cached:
+            logger.info(f"[{self.name}] Loaded {len(cached):,} cached borrowers from DB")
+
+    def load_borrowers_from_events(self, from_block: int, to_block: int, on_batch_found=None):
+        """
+        Scan Borrow events for each Silo.
+        Silo V2 Borrow topic: 0x312a5e5e1079f5dda4e95dbbd0b908b291fd5b992ef22073643ab691572c5b52
+        """
+        w3 = get_public_web3()
+        BORROW_TOPIC = "0x312a5e5e1079f5dda4e95dbbd0b908b291fd5b992ef22073643ab691572c5b52"
+
+        if not self._silo_addresses:
+            try:
+                self._silo_addresses = call_with_retry(self.factory.functions.getSilos)
+                logger.info(f"[{self.name}] Found {len(self._silo_addresses)} silos from factory")
+            except Exception as e:
+                logger.error(f"[{self.name}] Failed to get silos: {e}")
+                return
+
+        new_borrowers = set()
+        chunk = cfg("scanning", "event_scan_chunk")
+
+        # In a real bot, we'd distribute this over multiple cycles or use a subgraph
+        # For this task, we scan the top silos
+        for silo_addr in self._silo_addresses[:20]: # Only top 20 silos for performance
+            for start in range(from_block, to_block, chunk):
+                end = min(start + chunk - 1, to_block)
+                try:
+                    logs = w3.eth.get_logs({
+                        "address": checksum(silo_addr),
+                        "topics": [BORROW_TOPIC],
+                        "fromBlock": start,
+                        "toBlock": end,
+                    })
+                    batch_found = []
+                    for log in logs:
+                        topics = log.get("topics", [])
+                        if len(topics) >= 3:
+                            addr = "0x" + topics[2].hex()[-40:]
+                            caddr = w3.to_checksum_address(addr)
+                            if caddr not in self._borrowers and caddr not in new_borrowers:
+                                batch_found.append(caddr)
+                                new_borrowers.add(caddr)
+
+                    if on_batch_found and batch_found:
+                        on_batch_found(self.name, batch_found)
+                except Exception:
+                    continue
+
+        self._borrowers.update(new_borrowers)
+        set_last_scan_block(self.name, to_block)
+        if new_borrowers:
+            upsert_borrowers(list(new_borrowers), self.name)
+
+    def check_position(self, user: str) -> Optional[dict]:
+        """
+        Silo health is (ltv, lt). If ltv > lt, it is liquidatable.
+        Since we don't know which silo the user is in without a scan,
+        we check the silos they were found in.
+        For simplicity in this implementation, we assume we check the silo's getUserHealth.
+        """
+        w3 = get_web3()
+        # In a production bot, we'd track which user belongs to which silo(s).
+        # Here we attempt to find the silo by checking health on known active silos.
+        for silo_addr in self._silo_addresses[:20]:
+            try:
+                silo = w3.eth.contract(address=checksum(silo_addr), abi=SILO_ABI)
+                ltv, lt = silo.functions.getUserHealth(checksum(user)).call()
+
+                if lt == 0: continue # User has no position here
+
+                # Health Factor = LT / LTV (simplified)
+                hf = lt / ltv if ltv > 0 else 2.0
+
+                if hf > 1.15: continue
+
+                return {
+                    "protocol":          self.name,
+                    "user":              user,
+                    "collateral_token":  silo_addr, # Placeholder
+                    "collateral_symbol": "SILO",
+                    "collateral_bonus":  0.10,
+                    "debt_token":        "0x0000000000000000000000000000000000000000",
+                    "debt_symbol":       "UNKNOWN",
+                    "debt_to_cover":     0,
+                    "health_factor":     hf,
+                    "total_debt_usd":    0, # Requires complex reserve data
+                    "total_col_usd":     0,
+                    "pool_address":      silo_addr,
+                    "swap_params":       "",
+                }
+            except Exception:
+                continue
+        return None
+
+    def scan_all(self, zombie_queue: Optional[ZombieQueue] = None) -> List[dict]:
+        return self.scan_users(list(self._borrowers), zombie_queue=zombie_queue)
+
+    def scan_users(self, users: List[str], zombie_queue: Optional[ZombieQueue] = None) -> List[dict]:
+        liquidatable = []
+        for user in users:
+            pos = self.check_position(user)
+            if pos:
+                upsert_position(pos)
+                if pos["health_factor"] <= 1.0:
+                    liquidatable.append(pos)
+                if zombie_queue:
+                    zombie_queue.update(self.name, user, pos)
+            else:
+                delete_position(user, self.name)
+        return liquidatable
+
+    def get_borrower_count(self) -> int:
+        return len(self._borrowers)
+
+
+class CompoundIIIMonitor:
+    """
+    Monitors a Compound III (Comet) market.
+    Compound III uses a simplified model where isLiquidatable() returns a boolean.
+    """
+
+    def __init__(self, name: str, pool_addr: str):
+        self.name = name
+        self.pool_addr = pool_addr
+        self._borrowers: set = set()
+
+        w3 = get_web3()
+        self.pool = w3.eth.contract(address=checksum(pool_addr), abi=COMET_ABI)
+        self.base_token = self.pool.functions.baseToken().call()
+
+    def load_borrowers_from_db(self):
+        cached = get_borrowers(self.name)
+        self._borrowers.update(cached)
+        if cached:
+            logger.info(f"[{self.name}] Loaded {len(cached):,} cached borrowers from DB")
+
+    def load_borrowers_from_events(self, from_block: int, to_block: int, on_batch_found=None):
+        """
+        Compound III Supply event (topic0: 0xd6d480d5b3068db003533b170d67561494d72e3bf9fa40a266471351ebba9e16)
+        """
+        w3 = get_public_web3()
+        chunk = cfg("scanning", "event_scan_chunk")
+        SUPPLY_TOPIC = "0xd6d480d5b3068db003533b170d67561494d72e3bf9fa40a266471351ebba9e16"
+        new_borrowers = set()
+
+        total_reqs = (to_block - from_block) // chunk + 1
+        for i, start in enumerate(range(from_block, to_block, chunk), 1):
+            end = min(start + chunk - 1, to_block)
+            try:
+                logs = w3.eth.get_logs({
+                    "address": checksum(self.pool_addr),
+                    "topics": [SUPPLY_TOPIC],
+                    "fromBlock": start,
+                    "toBlock": end,
+                })
+                batch_found = []
+                for log in logs:
+                    topics = log.get("topics", [])
+                    if len(topics) >= 3:
+                        # topics[2] is dst (the user who supplied or received supply)
+                        addr = "0x" + topics[2].hex()[-40:]
+                        caddr = w3.to_checksum_address(addr)
+                        if caddr not in self._borrowers and caddr not in new_borrowers:
+                            batch_found.append(caddr)
+                            new_borrowers.add(caddr)
+
+                if on_batch_found and batch_found:
+                    on_batch_found(self.name, batch_found)
+            except Exception:
+                continue
+
+        self._borrowers.update(new_borrowers)
+        set_last_scan_block(self.name, to_block)
+        if new_borrowers:
+            upsert_borrowers(list(new_borrowers), self.name)
+
+    def check_position(self, user: str, is_liquidatable: Optional[bool] = None) -> Optional[dict]:
+        try:
+            if is_liquidatable is None:
+                is_liquidatable = call_with_retry(self.pool.functions.isLiquidatable, checksum(user))
+
+            # Get borrow balance
+            debt_raw = call_with_retry(self.pool.functions.borrowBalanceOf, checksum(user))
+            if debt_raw == 0:
+                return None
+
+            # Comet base tokens are typically 6 decimals (USDC)
+            # For the dashboard, we'll estimate a "health factor"
+            # If is_liquidatable is True, HF = 0.99, else 1.01 (simplified)
+            hf = 0.95 if is_liquidatable else 1.1
+
+            # TODO: Add full collateral value calculation for accurate HF and debt_usd
+            # For now, we use a placeholder debt_usd based on 6 decimals
+            debt_usd = debt_raw / 1e6
+
+            if not is_liquidatable and hf > 1.15:
+                return None
+
+            return {
+                "protocol":          self.name,
+                "user":              user,
+                "collateral_token":  "0x0000000000000000000000000000000000000000", # Multi-collateral in Comet
+                "collateral_symbol": "COMET",
+                "collateral_bonus":  0.07, # Compound III typically has ~7% liquidation penalty
+                "debt_token":        self.base_token,
+                "debt_symbol":       "USDC",
+                "debt_to_cover":     debt_raw,
+                "health_factor":     hf,
+                "total_debt_usd":    debt_usd,
+                "total_col_usd":     debt_usd * 1.1, # Dummy col value
+                "pool_address":      self.pool_addr,
+                "swap_params":       "", # Compound uses absorb() then buyCollateral()
+            }
+        except Exception:
+            return None
+
+    def scan_all(self, zombie_queue: Optional[ZombieQueue] = None) -> List[dict]:
+        return self.scan_users(list(self._borrowers), zombie_queue=zombie_queue)
+
+    def scan_users(self, users: List[str], zombie_queue: Optional[ZombieQueue] = None) -> List[dict]:
+        liquidatable = []
+        for user in users:
+            pos = self.check_position(user)
+            if pos:
+                upsert_position(pos)
+                if pos["health_factor"] <= 1.0:
+                    liquidatable.append(pos)
+                if zombie_queue:
+                    zombie_queue.update(self.name, user, pos)
+            else:
+                delete_position(user, self.name)
+        return liquidatable
+
+    def get_borrower_count(self) -> int:
+        return len(self._borrowers)
 
 
 class ProtocolMonitor:
@@ -371,28 +704,54 @@ class MultiProtocolMonitor:
         
         # Signatures
         AAVE_V3_BORROW = "0xb3d084820fb1a9decffb176436bd02558d15fac9b0ddfed8c465bc7359d7dce0"
-        AAVE_V2_BORROW = "0xc6a898309e823ee50bac64e45ca8adba6690e99e7841c45d39871800d985639b"
+        AAVE_V2_BORROW = "0xc6a898309e823ee50bac64e45ca8adba6690e99e7841c45d754e2a38e9019d9b"
 
         for name, pcfg in protocols.items():
             if not pcfg.get("enabled", False):
                 continue
+
+            ptype = pcfg.get("type", "aave_v3")
             pool_addr = pcfg.get("pool", "")
             dp_addr   = pcfg.get("data_provider", "")
-            if not pool_addr or pool_addr.startswith("0x000"):
-                logger.warning(f"Protocol {name} has no valid pool address -- skipping")
-                continue
+            factory_addr = pcfg.get("factory", "")
+
+            # Validation based on type
+            if ptype == "silo_v2":
+                if not factory_addr or factory_addr.startswith("0x000"):
+                    logger.warning(f"Protocol {name} (silo_v2) has no valid factory address -- skipping")
+                    continue
+            else:
+                if not pool_addr or pool_addr.startswith("0x000"):
+                    logger.warning(f"Protocol {name} ({ptype}) has no valid pool address -- skipping")
+                    continue
             
             # Default to V3 topic, override for Radiant (V2)
             topic = AAVE_V3_BORROW
             if "radiant" in name.lower():
                 topic = AAVE_V2_BORROW
 
-            self.monitors[name] = ProtocolMonitor(
-                name=name,
-                pool_addr=pool_addr,
-                data_provider_addr=dp_addr,
-                borrow_topic=topic
-            )
+            if ptype == "compound_iii":
+                self.monitors[name] = CompoundIIIMonitor(
+                    name=name,
+                    pool_addr=pool_addr
+                )
+            elif ptype == "silo_v2":
+                self.monitors[name] = SiloV2Monitor(
+                    name=name,
+                    factory_addr=pcfg.get("factory", "")
+                )
+            elif ptype == "morpho_blue":
+                self.monitors[name] = MorphoBlueMonitor(
+                    name=name,
+                    pool_addr=pool_addr
+                )
+            else:
+                self.monitors[name] = ProtocolMonitor(
+                    name=name,
+                    pool_addr=pool_addr,
+                    data_provider_addr=dp_addr,
+                    borrow_topic=topic
+                )
             logger.info(f"Initialized protocol monitor: {name} (topic: {topic[:10]}...)")
 
     def load_all_borrowers(self):

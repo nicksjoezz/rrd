@@ -215,6 +215,107 @@ LIQUIDATOR_CONTRACT_ABI = json.loads('''[
    "inputs":[],"outputs":[{"type":"address"}]}
 ]''')
 
+COMET_ABI = json.loads('''[
+  {"name":"isLiquidatable","type":"function","stateMutability":"view",
+   "inputs":[{"name":"account","type":"address"}],"outputs":[{"type":"bool"}]},
+  {"name":"borrowBalanceOf","type":"function","stateMutability":"view",
+   "inputs":[{"name":"account","type":"address"}],"outputs":[{"type":"uint256"}]},
+  {"name":"absorb","type":"function","stateMutability":"nonpayable",
+   "inputs":[{"name":"absorber","type":"address"},{"name":"accounts","type":"address[]"}],"outputs":[]},
+  {"name":"baseToken","type":"function","stateMutability":"view",
+   "inputs":[],"outputs":[{"type":"address"}]},
+  {"name":"getAssetInfo","type":"function","stateMutability":"view",
+   "inputs":[{"name":"i","type":"uint8"}],
+   "outputs":[
+     {"components":[
+       {"name":"offset","type":"uint8"},
+       {"name":"asset","type":"address"},
+       {"name":"priceFeed","type":"address"},
+       {"name":"scale","type":"uint64"},
+       {"name":"borrowCollateralFactor","type":"uint64"},
+       {"name":"liquidateCollateralFactor","type":"uint64"},
+       {"name":"liquidationFactor","type":"uint64"},
+       {"name":"supplyCap","type":"uint128"}
+     ],"name":"","type":"tuple"}
+   ]},
+  {"name":"numAssets","type":"function","stateMutability":"view",
+   "inputs":[],"outputs":[{"type":"uint8"}]},
+  {"name":"userBasic","type":"function","stateMutability":"view",
+   "inputs":[{"name":"","type":"address"}],
+   "outputs":[
+     {"name":"params","type":"int16"},
+     {"name":"baseBalance","type":"int104"},
+     {"name":"baseValue","type":"int104"}
+   ]}
+]''')
+
+SILO_FACTORY_ABI = json.loads('''[
+  {"name":"getSilos","type":"function","stateMutability":"view",
+   "inputs":[],"outputs":[{"type":"address[]"}]}
+]''')
+
+SILO_ABI = json.loads('''[
+  {"name":"getUserHealth","type":"function","stateMutability":"view",
+   "inputs":[{"name":"user","type":"address"}],
+   "outputs":[{"name":"ltv","type":"uint256"},{"name":"lt","type":"uint256"}]},
+  {"name":"liquidationCall","type":"function","stateMutability":"nonpayable",
+   "inputs":[
+     {"name":"debtToken","type":"address"},
+     {"name":"collateralToken","type":"address"},
+     {"name":"borrower","type":"address"},
+     {"name":"repayAmount","type":"uint256"},
+     {"name":"receiveSToken","type":"bool"}
+   ],"outputs":[]},
+  {"name":"assetConfig","type":"function","stateMutability":"view",
+   "inputs":[{"name":"asset","type":"address"}],
+   "outputs":[
+     {"components":[
+       {"name":"collateralPriority","type":"uint16"},
+       {"name":"ltv","type":"uint64"},
+       {"name":"lt","type":"uint64"},
+       {"name":"liquidationFee","type":"uint64"},
+       {"name":"debtPriority","type":"uint16"}
+     ],"name":"","type":"tuple"}
+   ]}
+]''')
+
+MORPHO_BLUE_ABI = json.loads('''[
+  {"name":"position","type":"function","stateMutability":"view",
+   "inputs":[
+     {"name":"id","type":"bytes32"},
+     {"name":"account","type":"address"}
+   ],
+   "outputs":[
+     {"name":"supplyShares","type":"uint256"},
+     {"name":"borrowShares","type":"uint256"},
+     {"name":"collateral","type":"uint256"}
+   ]},
+  {"name":"market","type":"function","stateMutability":"view",
+   "inputs":[{"name":"id","type":"bytes32"}],
+   "outputs":[
+     {"name":"totalSupplyAssets","type":"uint128"},
+     {"name":"totalSupplyShares","type":"uint128"},
+     {"name":"totalBorrowAssets","type":"uint128"},
+     {"name":"totalBorrowShares","type":"uint128"},
+     {"name":"lastUpdate","type":"uint128"},
+     {"name":"fee","type":"uint128"}
+   ]},
+  {"name":"liquidate","type":"function","stateMutability":"nonpayable",
+   "inputs":[
+     {"components":[
+       {"name":"loanToken","type":"address"},
+       {"name":"collateralToken","type":"address"},
+       {"name":"oracle","type":"address"},
+       {"name":"irm","type":"address"},
+       {"name":"lltv","type":"uint256"}
+     ],"name":"params","type":"tuple"},
+     {"name":"borrower","type":"address"},
+     {"name":"seizedAssets","type":"uint256"},
+     {"name":"repaidShares","type":"uint256"},
+     {"name":"data","type":"bytes"}
+   ],"outputs":[]}
+]''')
+
 # ── Multicall3 (Arbitrum) ───────────────────────────────────────────────────
 MULTICALL3_ADDR = "0xcA11bde05977b3631167028862bE2a173976CA11"
 MULTICALL3_ABI  = json.loads('[{"inputs":[{"components":[{"internalType":"address","name":"target","type":"address"},{"internalType":"bytes","name":"callData","type":"bytes"}],"internalType":"struct Multicall3.Call[]","name":"calls","type":"tuple[]"}],"name":"aggregate","outputs":[{"internalType":"uint256","name":"blockNumber","type":"uint256"},{"internalType":"bytes[]","name":"returnData","type":"bytes[]"}],"stateMutability":"payable","type":"function"}]')
