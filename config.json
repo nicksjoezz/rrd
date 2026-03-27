@@ -4,6 +4,7 @@
     "rpc_ws": "wss://arb1.arbitrum.io/ws",
     "alchemy_key": "CcLjEBHdIqeri3KR6CzSu",
     "alchemy_key2": "9fVR5rZUC-g2L5zbeywTA",
+    "alchemy_key3": "g0Mank73kn2CRetJh7emu",
     "chain_id": 42161,
     "chain_name": "Arbitrum One"
   },
