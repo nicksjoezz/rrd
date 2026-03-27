@@ -76,9 +76,14 @@ class MorphoBlueMonitor:
         new_borrowers = set()
         chunk = cfg("scanning", "event_scan_chunk")
 
-        for start in range(from_block, to_block, chunk):
+        total_reqs = (to_block - from_block) // chunk + 1
+        for i, start in enumerate(range(from_block, to_block, chunk), 1):
             end = min(start + chunk - 1, to_block)
             try:
+                if i % 10 == 0 or i == 1 or i == total_reqs:
+                    pct = (i / total_reqs) * 100
+                    logger.info(f"[{self.name}] Progress: {pct:.1f}%  |  Borrowers found: {len(new_borrowers)}")
+
                 logs = w3.eth.get_logs({
                     "address": checksum(self.pool_addr),
                     "topics": [self.borrow_topic],
@@ -198,15 +203,23 @@ class SiloV2Monitor:
                 self._silo_addresses = call_with_retry(self.factory.functions.getSilos)
                 logger.info(f"[{self.name}] Found {len(self._silo_addresses)} silos from factory")
             except Exception as e:
-                logger.error(f"[{self.name}] Failed to get silos: {e}")
-                return
+                logger.error(f"[{self.name}] Failed to get silos from factory {self.factory_addr}: {e}")
+                # Fallback: commonly used silos if factory fails
+                self._silo_addresses = [
+                    "0x27D560032eB0661765cE7E36C289F43881B7a372", # USDC
+                    "0x425266497746f363c4C52A206A42E10E86872583", # WETH
+                    "0x15313936F1749C221975971488a0998399E539Cb", # WBTC
+                ]
+                logger.info(f"[{self.name}] Using fallback silo list ({len(self._silo_addresses)} silos)")
 
         new_borrowers = set()
         chunk = cfg("scanning", "event_scan_chunk")
 
-        # In a real bot, we'd distribute this over multiple cycles or use a subgraph
-        # For this task, we scan the top silos
-        for silo_addr in self._silo_addresses[:20]: # Only top 20 silos for performance
+        active_silos = self._silo_addresses[:20]
+        total_silos = len(active_silos)
+
+        for idx, silo_addr in enumerate(active_silos, 1):
+            logger.info(f"[{self.name}] Scanning Silo {idx}/{total_silos}: {silo_addr[:10]}...")
             for start in range(from_block, to_block, chunk):
                 end = min(start + chunk - 1, to_block)
                 try:
@@ -333,6 +346,10 @@ class CompoundIIIMonitor:
         for i, start in enumerate(range(from_block, to_block, chunk), 1):
             end = min(start + chunk - 1, to_block)
             try:
+                if i % 10 == 0 or i == 1 or i == total_reqs:
+                    pct = (i / total_reqs) * 100
+                    logger.info(f"[{self.name}] Progress: {pct:.1f}%  |  Borrowers found: {len(new_borrowers)}")
+
                 logs = w3.eth.get_logs({
                     "address": checksum(self.pool_addr),
                     "topics": [self.borrow_topic],
@@ -472,7 +489,7 @@ class ProtocolMonitor:
         for i, start in enumerate(range(from_block, to_block, chunk), 1):
             end = min(start + chunk - 1, to_block)
             try:
-                if i % 50 == 0 or i == 1 or i == total_reqs:
+                if i % 10 == 0 or i == 1 or i == total_reqs:
                     pct = (i / total_reqs) * 100
                     logger.info(f"[{self.name}] Progress: {pct:.1f}%  |  Borrowers found: {len(new_borrowers)}")
 

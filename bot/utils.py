@@ -106,6 +106,10 @@ def get_alchemy_web3() -> Web3:
     if not all_keys:
         return get_public_web3()
 
+    # If the user is on a free tier, we must fallback to public RPC for large scans
+    # or significantly reduce the chunk size.
+    # For now, let's just make sure get_web3() can easily access public RPC.
+
     # Rebuild pool if keys changed or pool is empty
     if len(_alchemy_w3_pool) != len(all_keys):
         _alchemy_w3_pool = []
