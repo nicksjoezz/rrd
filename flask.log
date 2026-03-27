@@ -1,0 +1,70 @@
+2026-03-27 13:31:35 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
+Werkzeug appears to be used in a production deployment. Consider switching to a production web server instead.
+
+════════════════════════════════════════════════════════
+  LiqBot  →  http://localhost:5000
+  Mode:       SIMULATE
+  Bot:        manual start required (--no-bot flag)
+════════════════════════════════════════════════════════
+
+2026-03-27 13:31:35 [INFO] liquidation_bot.zombie: [ZOMBIE] Loaded 0 positions from zombies.json
+ * Serving Flask app 'main'
+ * Debug mode: off
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.0.2:5000
+[33mPress CTRL+C to quit[0m
+2026-03-27 13:31:36 [INFO] liquidation_bot.monitor: Initialized protocol monitor: aave_v3 (topic: 0xb3d08482...)
+2026-03-27 13:31:36 [INFO] liquidation_bot.monitor: Initialized protocol monitor: silo_v2 (topic: 0xb3d08482...)
+2026-03-27 13:31:36 [INFO] liquidation_bot.monitor: Initialized protocol monitor: compound_iii_usdc (topic: 0xb3d08482...)
+2026-03-27 13:31:36 [INFO] liquidation_bot.monitor: Initialized protocol monitor: morpho_blue (topic: 0xb3d08482...)
+127.0.0.1 - - [27/Mar/2026 13:32:47] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:47] "GET /socket.io/?EIO=4&transport=polling&t=PqlVrTE HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:47] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:47] "GET /api/positions HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:47] "GET /api/profit-history HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:47] "GET /api/stats HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:48] "POST /socket.io/?EIO=4&transport=polling&t=PqlVrY4&sid=iN7HA3dbtBWLoPjLAAAA HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:48] "GET /socket.io/?EIO=4&transport=polling&t=PqlVrYF&sid=iN7HA3dbtBWLoPjLAAAA HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:48] "GET /socket.io/?EIO=4&transport=polling&t=PqlVrZp&sid=iN7HA3dbtBWLoPjLAAAA HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:50] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:50] "GET /socket.io/?EIO=4&transport=websocket&sid=iN7HA3dbtBWLoPjLAAAA HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:50] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:50] "GET /socket.io/?EIO=4&transport=polling&t=PqlVs6r HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:50] "GET /api/profit-history HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:50] "GET /api/stats HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:50] "GET /api/positions HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:50] "POST /socket.io/?EIO=4&transport=polling&t=PqlVs7F&sid=w2bNKbUUZEMT6_9GAAAC HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:50] "GET /socket.io/?EIO=4&transport=polling&t=PqlVs7F.0&sid=w2bNKbUUZEMT6_9GAAAC HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:32:50] "GET /socket.io/?EIO=4&transport=polling&t=PqlVs7m&sid=w2bNKbUUZEMT6_9GAAAC HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:33:22] "GET /socket.io/?EIO=4&transport=websocket&sid=w2bNKbUUZEMT6_9GAAAC HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:31] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:31] "GET /socket.io/?EIO=4&transport=polling&t=PqlWEpT HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:31] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:31] "GET /api/profit-history HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:31] "GET /api/stats HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:31] "POST /socket.io/?EIO=4&transport=polling&t=PqlWEps&sid=Cgc2aa7OdCizqIu9AAAE HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:31] "GET /socket.io/?EIO=4&transport=polling&t=PqlWEpv&sid=Cgc2aa7OdCizqIu9AAAE HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:31] "GET /api/positions HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:31] "GET /socket.io/?EIO=4&transport=polling&t=PqlWEtV&sid=Cgc2aa7OdCizqIu9AAAE HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:31] "GET /socket.io/?EIO=4&transport=polling&t=PqlWEtx&sid=Cgc2aa7OdCizqIu9AAAE HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:34] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:34] "GET /socket.io/?EIO=4&transport=websocket&sid=Cgc2aa7OdCizqIu9AAAE HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:34] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:34] "GET /socket.io/?EIO=4&transport=polling&t=PqlWFSP HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:34] "GET /api/profit-history HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:34] "GET /api/stats HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:34] "POST /socket.io/?EIO=4&transport=polling&t=PqlWFSj&sid=7gnAcFqVbK0FELL9AAAG HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:34] "GET /socket.io/?EIO=4&transport=polling&t=PqlWFSk&sid=7gnAcFqVbK0FELL9AAAG HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:34] "GET /api/positions HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:34] "GET /socket.io/?EIO=4&transport=polling&t=PqlWFTA&sid=7gnAcFqVbK0FELL9AAAG HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:37] "GET /settings HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:37] "GET /socket.io/?EIO=4&transport=websocket&sid=7gnAcFqVbK0FELL9AAAG HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:37] "GET /socket.io/?EIO=4&transport=polling&t=PqlWGGk HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:37] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:37] "GET /api/config HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:37] "POST /socket.io/?EIO=4&transport=polling&t=PqlWGGv&sid=Zv6Bhjx6v5v77B1UAAAI HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:37] "GET /socket.io/?EIO=4&transport=polling&t=PqlWGGw&sid=Zv6Bhjx6v5v77B1UAAAI HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:37] "GET /socket.io/?EIO=4&transport=polling&t=PqlWGH9&sid=Zv6Bhjx6v5v77B1UAAAI HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 13:34:39] "GET /socket.io/?EIO=4&transport=websocket&sid=Zv6Bhjx6v5v77B1UAAAI HTTP/1.1" 200 -

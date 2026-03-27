@@ -797,85 +797,89 @@ class MultiProtocolMonitor:
                 )
             logger.info(f"Initialized protocol monitor: {name} (topic: {topic[:10]}...)")
 
+    async def _load_monitor_events(self, name, monitor, from_block, to_block):
+        # Streaming callback: verifies borrowers as they are found
+        def _streaming_callback(proto_name, users):
+            m = self.monitors.get(proto_name)
+            if not m: return
+
+            found = m.scan_users(users, zombie_queue=self.zombie_queue)
+            if found:
+                logger.info(f"[{proto_name}] Streaming verification: {len(found)} at-risk positions found!")
+                for p in found:
+                    if p.get("health_factor", 2.0) <= 1.0:
+                        logger.warning(f"[STREAMS] LIQUIDATABLE: {p['user']} HF={p['health_factor']:.4f}")
+
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                monitor.load_borrowers_from_events,
+                from_block, to_block, _streaming_callback
+            )
+        except Exception as e:
+            logger.error(f"[{name}] Event load error: {e}")
+
     def load_all_borrowers(self):
         """
-        Load borrowers using DB cache + incremental event scan.
-        1. SQLite DB cache (instant restart recovery)
-        2. Borrow event scan (initial 50-day window on first run)
+        Load borrowers using DB cache + incremental event scan concurrently.
         """
         w3            = get_web3()
         current_block = w3.eth.block_number
+        ARBITRUM_50_DAYS = 17_280_000
 
-        # -- DB cache + incremental event scan for all protocols ----------------
+        tasks = []
         for name, monitor in self.monitors.items():
             monitor.load_borrowers_from_db()
             last_block = get_last_scan_block(name)
 
-            # Arbitrum block speed: ~4 blocks/second = 345,600 blocks/day
-            # Use 50 days (~17.2M blocks) for deep discovery
-            ARBITRUM_50_DAYS = 17_280_000
-
             if last_block == 0:
                 from_block = max(0, current_block - ARBITRUM_50_DAYS)
-                logger.info(
-                    f"[{name}] First run -- scanning last 50 days "
-                    f"({ARBITRUM_50_DAYS:,} blocks on Arbitrum)"
-                )
+                logger.info(f"[{name}] First run -- scanning last 50 days")
             else:
                 from_block = last_block + 1
-                logger.info(
-                    f"[{name}] Incremental: blocks {from_block:,} -> {current_block:,}"
-                )
 
-        # -- Load manually added/persistent zombies into monitors ----------------
+            if from_block < current_block:
+                tasks.append(self._load_monitor_events(name, monitor, from_block, current_block))
+
+        # Load zombies
         zombies = self.zombie_queue.get_watching()
         for z in zombies:
             proto = z.get("protocol")
             user  = z.get("user")
             if proto and user and proto in self.monitors:
                 self.monitors[proto]._borrowers.add(user.lower())
-                logger.debug(f"[ZOMBIE] Loaded {user[:8]} from persistence into {proto} monitor")
 
-        # -- Start incremental scan --------------------------------------------
-        for name, monitor in self.monitors.items():
-            last_block = get_last_scan_block(name)
-            if last_block == 0:
-                from_block = max(0, current_block - ARBITRUM_50_DAYS)
-            else:
-                from_block = last_block + 1
-            
-            if from_block < current_block:
-                # Streaming callback: verifies borrowers as they are found
-                def _streaming_callback(proto_name, users):
-                    m = self.monitors.get(proto_name)
-                    if not m: return
-                    
-                    found = m.scan_users(users, zombie_queue=self.zombie_queue)
-                    if found:
-                        logger.info(f"[{proto_name}] Streaming verification: {len(found)} at-risk positions found!")
-                        # In the main loop, we'll need to handle these. 
-                        # For now, scan_users already updates the zombie_queue.
-                        for p in found:
-                            if p.get("health_factor", 2.0) <= 1.0:
-                                logger.warning(f"[STREAMS] LIQUIDATABLE: {p['user']} HF={p['health_factor']:.4f}")
-
-                monitor.load_borrowers_from_events(from_block, current_block, on_batch_found=_streaming_callback)
+        if tasks:
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(asyncio.gather(*tasks))
+                loop.close()
+            except Exception as e:
+                logger.error(f"Async discovery failed: {e}")
 
     def refresh_borrowers(self):
-        """Incremental update -- scan only new blocks found since last refresh."""
+        """Incremental concurrent update."""
         w3 = get_web3()
         current_block = w3.eth.block_number
 
+        tasks = []
         for name, monitor in self.monitors.items():
             last_block = get_last_scan_block(name)
-            if last_block == 0:
-                # Fallback if first run didn't finish properly
-                from_block = max(0, current_block - 1000)
-            else:
-                from_block = last_block + 1
+            from_block = (last_block + 1) if last_block > 0 else (current_block - 1000)
             
             if from_block < current_block:
-                monitor.load_borrowers_from_events(from_block, current_block)
+                tasks.append(self._load_monitor_events(name, monitor, from_block, current_block))
+
+        if tasks:
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(asyncio.gather(*tasks))
+                loop.close()
+            except Exception as e:
+                logger.error(f"Async refresh failed: {e}")
 
     async def _scan_monitor(self, name, monitor):
         try:

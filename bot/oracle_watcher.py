@@ -40,13 +40,15 @@ class OracleWatcher:
         feed_cfg = cfg("oracle", "chainlink_feeds")
         for name, addr in feed_cfg.items():
             try:
+                # Ensure address is a string before checksumming
+                clean_addr = str(addr).strip()
                 self._feeds[name] = w3.eth.contract(
-                    address=checksum(addr),
+                    address=checksum(clean_addr),
                     abi=CHAINLINK_FEED_ABI
                 )
-                logger.info(f"Oracle: watching {name} at {addr[:10]}...")
+                logger.info(f"Oracle: watching {name} at {clean_addr[:10]}...")
             except Exception as e:
-                logger.warning(f"Oracle: failed to init feed {name}: {e}")
+                logger.warning(f"Oracle: failed to init feed {name} ({addr}): {e}")
 
     def get_price(self, feed_name: str) -> Optional[float]:
         """Get latest price from a Chainlink feed."""
