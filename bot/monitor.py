@@ -15,6 +15,7 @@ Edge advantages:
 
 import logging
 import time
+import asyncio
 from typing import List, Optional
 from web3 import Web3
 
@@ -592,64 +593,61 @@ class ProtocolMonitor:
 
     def _get_best_tokens(self, user: str):
         """
-        Find the best collateral (highest USD value or highest bonus) and
-        highest debt token to use in the liquidation call.
-        Returns (col_addr, col_sym, col_bonus, debt_addr, debt_sym, debt_raw_wei) or None.
+        Find the best collateral and debt tokens using Multicall.
         """
         if not self.data_provider:
             return None
 
-        token_map = get_token_map()
-        best_col_value = 0
-        best_col_bonus = 0
-        best_col  = None
-        best_debt_value = 0
-        best_debt = None
-        best_debt_raw = 0
+        w3 = get_web3()
+        mc = w3.eth.contract(address=MULTICALL3_ADDR, abi=MULTICALL3_ABI)
 
-        tokens = cfg("tokens")
+        token_items = list(cfg("tokens").items())
+        calls = []
+        for sym, info in token_items:
+            call_data = self.data_provider.encodeABI("getUserReserveData", [checksum(info["address"]), checksum(user)])
+            calls.append({"target": self.data_provider.address, "callData": call_data})
 
-        for sym, info in tokens.items():
-            addr = info["address"]
-            if not self.data_provider:
+        try:
+            _, return_data = mc.functions.aggregate(calls).call()
+
+            best_col_score = 0
+            best_col = None
+            best_debt_score = 0
+            best_debt = None
+            best_debt_raw = 0
+
+            for i, raw_res in enumerate(return_data):
+                sym, info = token_items[i]
+                # getUserReserveData return types: (uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint40, bool)
+                rd = w3.codec.decode(["uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint40", "bool"], raw_res)
+
+                a_bal = rd[0]
+                v_debt = rd[2]
+                decimals = info["decimals"]
+                bonus = info["liquidation_bonus"]
+
+                if a_bal > 0:
+                    usd = a_bal / (10 ** decimals)
+                    score = usd * (1 + bonus) if cfg("strategy", "prioritize_high_bonus") else usd
+                    if score > best_col_score:
+                        best_col_score = score
+                        best_col = (info["address"], sym, bonus)
+
+                if v_debt > 0:
+                    score = v_debt / (10 ** decimals)
+                    if score > best_debt_score:
+                        best_debt_score = score
+                        best_debt = (info["address"], sym)
+                        best_debt_raw = v_debt
+
+            if not best_col or not best_debt:
                 return None
 
-            try:
-                rd = call_with_retry(self.data_provider.functions.getUserReserveData, checksum(addr), checksum(user))
+            return (best_col[0], best_col[1], best_col[2], best_debt[0], best_debt[1], best_debt_raw)
 
-                a_token_bal   = rd[0]  # collateral
-                variable_debt = rd[2]  # debt
-                decimals      = info["decimals"]
-                bonus         = info["liquidation_bonus"]
-
-                # Score collateral: prefer high-bonus assets when enabled
-                if a_token_bal > 0:
-                    col_usd = a_token_bal / (10 ** decimals)  # rough score
-                    score   = col_usd * (1 + bonus) if cfg("strategy", "prioritize_high_bonus") else col_usd
-                    if score > best_col_bonus:
-                        best_col_bonus = score
-                        best_col_value = col_usd
-                        best_col = (addr, sym, bonus)
-
-                # Track highest debt
-                if variable_debt > 0:
-                    debt_score = variable_debt / (10 ** decimals)
-                    if debt_score > best_debt_value:
-                        best_debt_value = debt_score
-                        best_debt = (addr, sym)
-                        best_debt_raw = variable_debt
-
-            except Exception:
-                continue
-
-        if not best_col or not best_debt:
+        except Exception as e:
+            logger.debug(f"Multicall reserve data error for {user[:8]}: {e}")
             return None
-
-        return (
-            best_col[0], best_col[1], best_col[2],
-            best_debt[0], best_debt[1],
-            best_debt_raw
-        )
 
     def scan_all(self, zombie_queue: Optional[ZombieQueue] = None) -> List[dict]:
         """Scan all known borrowers."""
@@ -686,7 +684,13 @@ class ProtocolMonitor:
                     user = chunk[j]
                     dec = w3.codec.decode(["uint256", "uint256", "uint256", "uint256", "uint256", "uint256"], raw_res)
                     
-                    if dec[1] == 0: continue
+                    if dec[1] == 0:
+                        # Optimization: user has 0 debt, definitely not liquidatable.
+                        # Cleanup any stale state.
+                        delete_position(user, self.name)
+                        if zombie_queue:
+                            zombie_queue.update(self.name, user, {"total_debt_usd": 0})
+                        continue
                     
                     hf = health_factor_float(dec[5])
                     
@@ -746,7 +750,6 @@ class MultiProtocolMonitor:
         
         # Signatures
         AAVE_V3_BORROW = "0xb3d084820fb1a9decffb176436bd02558d15fac9b0ddfed8c465bc7359d7dce0"
-        AAVE_V2_BORROW = "0xc6a898309e823ee50bac64e45ca8adba6690e99e7841c45d754e2a38e9019d9b"
 
         for name, pcfg in protocols.items():
             if not pcfg.get("enabled", False):
@@ -767,10 +770,8 @@ class MultiProtocolMonitor:
                     logger.warning(f"Protocol {name} ({ptype}) has no valid pool address -- skipping")
                     continue
             
-            # Default to V3 topic, override for Radiant (V2)
+            # Default to V3 topic
             topic = AAVE_V3_BORROW
-            if "radiant" in name.lower():
-                topic = AAVE_V2_BORROW
 
             if ptype == "compound_iii":
                 self.monitors[name] = CompoundIIIMonitor(
@@ -811,8 +812,7 @@ class MultiProtocolMonitor:
             last_block = get_last_scan_block(name)
 
             # Arbitrum block speed: ~4 blocks/second = 345,600 blocks/day
-            # Use 50 days (~17.28M blocks) for a thorough initial borrower list
-            # Arbitrum block speed is approx 4 blocks/sec (345,600/day)
+            # Use 50 days (~17.2M blocks) for deep discovery
             ARBITRUM_50_DAYS = 17_280_000
 
             if last_block == 0:
@@ -877,21 +877,41 @@ class MultiProtocolMonitor:
             if from_block < current_block:
                 monitor.load_borrowers_from_events(from_block, current_block)
 
+    async def _scan_monitor(self, name, monitor):
+        try:
+            # Run the synchronous scan_all in a thread pool to avoid blocking the event loop
+            loop = asyncio.get_event_loop()
+            positions = await loop.run_in_executor(None, monitor.scan_all, self.zombie_queue)
+            logger.debug(f"[{name}] Found {len(positions)} liquidatable positions")
+            return positions
+        except Exception as e:
+            logger.error(f"[{name}] Scan error: {e}")
+            return []
+
     def scan_all_protocols(self) -> List[dict]:
         """
-        Scan all enabled protocols. Returns list of liquidatable positions
+        Scan all enabled protocols concurrently. Returns list of liquidatable positions
         across all protocols, sorted by profit potential.
         Also records HF velocity for fast-falling detection.
         """
-        all_positions = []
-
-        for name, monitor in self.monitors.items():
-            try:
-                positions = monitor.scan_all(zombie_queue=self.zombie_queue)
-                all_positions.extend(positions)
-                logger.debug(f"[{name}] Found {len(positions)} liquidatable positions")
-            except Exception as e:
-                logger.error(f"[{name}] Scan error: {e}")
+        # Run async scanning
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            tasks = [self._scan_monitor(name, monitor) for name, monitor in self.monitors.items()]
+            results = loop.run_until_complete(asyncio.gather(*tasks))
+            loop.close()
+            all_positions = [pos for batch in results for pos in batch]
+        except Exception as e:
+            logger.error(f"Async scan failed: {e}")
+            # Fallback to sync
+            all_positions = []
+            for name, monitor in self.monitors.items():
+                try:
+                    positions = monitor.scan_all(zombie_queue=self.zombie_queue)
+                    all_positions.extend(positions)
+                except Exception:
+                    pass
 
         # Record velocity for all scanned positions (including non-liquidatable)
         for pos in all_positions:
@@ -915,9 +935,19 @@ class MultiProtocolMonitor:
 
         return all_positions
 
+    async def _scan_zombie_batch(self, proto_name, users):
+        monitor = self.monitors.get(proto_name)
+        if not monitor: return []
+        try:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, monitor.scan_users, users, self.zombie_queue)
+        except Exception as e:
+            logger.error(f"[{proto_name}] Zombie scan error: {e}")
+            return []
+
     def scan_zombies(self) -> List[dict]:
         """
-        High-priority scan specifically for wallets in the zombie queue.
+        High-priority concurrent scan specifically for wallets in the zombie queue.
         Ensures their HF is always up-to-date in the dashboard and database.
         Returns list of newly ready liquidations.
         """
@@ -931,15 +961,26 @@ class MultiProtocolMonitor:
             if p not in by_proto: by_proto[p] = []
             by_proto[p].append(z.get("user"))
 
-        all_ready = []
-        for proto_name, users in by_proto.items():
-            monitor = self.monitors.get(proto_name)
-            if not monitor: continue
-
-            ready = monitor.scan_users(users, zombie_queue=self.zombie_queue)
-            all_ready.extend(ready)
-
-        return all_ready
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            tasks = [self._scan_zombie_batch(pn, u) for pn, u in by_proto.items()]
+            results = loop.run_until_complete(asyncio.gather(*tasks))
+            loop.close()
+            return [pos for batch in results for pos in batch]
+        except Exception as e:
+            logger.error(f"Async zombie scan failed: {e}")
+            # Fallback
+            all_ready = []
+            for proto_name, users in by_proto.items():
+                monitor = self.monitors.get(proto_name)
+                if not monitor: continue
+                try:
+                    ready = monitor.scan_users(users, zombie_queue=self.zombie_queue)
+                    all_ready.extend(ready)
+                except Exception:
+                    pass
+            return all_ready
 
     def get_stats(self) -> dict:
         total = sum(m.get_borrower_count() for m in self.monitors.values())
@@ -969,7 +1010,6 @@ class MultiProtocolMonitor:
 
         # 2. Enable/Add new protocols
         AAVE_V3_BORROW = "0xb3d084820fb1a9decffb176436bd02558d15fac9b0ddfed8c465bc7359d7dce0"
-        AAVE_V2_BORROW = "0xc6a898309e823ee50bac64e45ca8adba6690e99e7841c45d754e2a38e9019d9b"
 
         for name, pcfg in new_protocols.items():
             if not pcfg.get("enabled", False) or name in self.monitors:
@@ -990,10 +1030,8 @@ class MultiProtocolMonitor:
                     logger.warning(f"Protocol {name} ({ptype}) has no valid pool address -- skipping")
                     continue
 
-            # Default to V3 topic, override for Radiant (V2)
+            # Default to V3 topic
             topic = AAVE_V3_BORROW
-            if "radiant" in name.lower():
-                topic = AAVE_V2_BORROW
 
             if ptype == "compound_iii":
                 self.monitors[name] = CompoundIIIMonitor(name=name, pool_addr=pool_addr)

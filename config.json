@@ -18,13 +18,6 @@
       "addresses_provider": "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb",
       "liquidation_bonus_override": {}
     },
-    "radiant": {
-      "enabled": false,
-      "pool": "0xF4B1486DD74D07706052A33d31d7c0AAFD0659E1",
-      "data_provider": "0x596B1b49645C4dAB4823BB5E2Be97C5ce4b09aeA",
-      "addresses_provider": "0x091d52CacE1edc5527C99cDCFA6937C1635330E4",
-      "liquidation_bonus_override": {}
-    },
     "silo_v2": {
       "enabled": true,
       "type": "silo_v2",

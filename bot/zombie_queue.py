@@ -88,8 +88,17 @@ class ZombieQueue:
         """
         key = f"{protocol}:{user.lower()}"
         hf  = position.get("health_factor", 99.0)
+        debt = float(position.get("total_debt_usd", 0))
 
         with self._lock:
+            # 1. 0-Debt handling: remove from queue immediately
+            if debt <= 0:
+                if key in self._queue:
+                    logger.debug(f"[ZOMBIE] Removed {user[:8]} (0 debt) from queue")
+                    self._queue.pop(key, None)
+                    self._save()
+                return None
+
             if hf <= self.fire_hf:
                 # Ready to liquidate — pop from queue and return
                 self._queue.pop(key, None)

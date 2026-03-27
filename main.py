@@ -338,19 +338,20 @@ def api_profit_history():
 
 @app.route("/api/positions")
 def api_positions():
-    db_positions = get_approaching_positions()
+    db_positions = [p for p in get_approaching_positions() if float(p.get('total_debt_usd', 0)) > 0]
     try:
         zombies = get_monitor().zombie_queue.get_watching()
         # Merge, preferring database if health factors are updated, but zombies might be more current
         seen = {f"{p['protocol']}:{p['address'].lower()}" for p in db_positions}
         for z in zombies:
             key = f"{z['protocol']}:{z['user'].lower()}"
-            if key not in seen:
+            debt = float(z.get('total_debt_usd', 0))
+            if key not in seen and debt > 0:
                 db_positions.append({
                     "address": z['user'],
                     "protocol": z['protocol'],
                     "health_factor": z['health_factor'],
-                    "total_debt_usd": z.get('total_debt_usd', 0),
+                    "total_debt_usd": debt,
                     "total_col_usd": z.get('total_col_usd', 0),
                     "collateral_token": z.get('collateral_token', ''),
                     "debt_token": z.get('debt_token', ''),
@@ -737,18 +738,19 @@ def api_analytics():
 
 # ── Real-time SocketIO push ───────────────────────────────────────────────────
 def _push_positions(monitor):
-    db_positions = get_approaching_positions()
+    db_positions = [p for p in get_approaching_positions() if float(p.get('total_debt_usd', 0)) > 0]
     try:
         zombies = monitor.zombie_queue.get_watching()
         seen = {f"{p['protocol']}:{p['address'].lower()}" for p in db_positions}
         for z in zombies:
             key = f"{z['protocol']}:{z['user'].lower()}"
-            if key not in seen:
+            debt = float(z.get('total_debt_usd', 0))
+            if key not in seen and debt > 0:
                 db_positions.append({
                     "address": z['user'],
                     "protocol": z['protocol'],
                     "health_factor": z['health_factor'],
-                    "total_debt_usd": z.get('total_debt_usd', 0),
+                    "total_debt_usd": debt,
                     "total_col_usd": z.get('total_col_usd', 0),
                     "collateral_token": z.get('collateral_token', ''),
                     "debt_token": z.get('debt_token', ''),
