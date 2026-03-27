@@ -1,0 +1,90 @@
+Werkzeug appears to be used in a production deployment. Consider switching to a production web server instead.
+ * Serving Flask app 'main'
+ * Debug mode: off
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.0.2:5000
+[33mPress CTRL+C to quit[0m
+127.0.0.1 - - [27/Mar/2026 20:10:52] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:52] "GET /socket.io/?EIO=4&transport=polling&t=PqmwynK HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:52] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:53] "POST /socket.io/?EIO=4&transport=polling&t=Pqmwypx&sid=HUls3Q08ytWrAjnEAAAA HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:53] "GET /socket.io/?EIO=4&transport=polling&t=Pqmwyqg&sid=HUls3Q08ytWrAjnEAAAA HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:53] "GET /socket.io/?EIO=4&transport=polling&t=Pqmwyr4&sid=HUls3Q08ytWrAjnEAAAA HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:54] "GET /positions HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:54] "GET /socket.io/?EIO=4&transport=websocket&sid=HUls3Q08ytWrAjnEAAAA HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:54] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:54] "GET /socket.io/?EIO=4&transport=polling&t=PqmwzEJ HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:54] "POST /socket.io/?EIO=4&transport=polling&t=PqmwzEZ&sid=BBrxXdWR7qEkxQlqAAAC HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:54] "GET /socket.io/?EIO=4&transport=polling&t=PqmwzEd&sid=BBrxXdWR7qEkxQlqAAAC HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:54] "GET /socket.io/?EIO=4&transport=polling&t=PqmwzEp&sid=BBrxXdWR7qEkxQlqAAAC HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:56] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:56] "GET /socket.io/?EIO=4&transport=websocket&sid=BBrxXdWR7qEkxQlqAAAC HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:56] "GET /socket.io/?EIO=4&transport=polling&t=PqmwzcX HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:56] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:56] "POST /socket.io/?EIO=4&transport=polling&t=Pqmwzco&sid=rpZREsvIW7N8rXhyAAAE HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:56] "GET /socket.io/?EIO=4&transport=polling&t=Pqmwzcr&sid=rpZREsvIW7N8rXhyAAAE HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:56] "GET /socket.io/?EIO=4&transport=polling&t=Pqmwzd9&sid=rpZREsvIW7N8rXhyAAAE HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:59] "GET /positions HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:59] "GET /socket.io/?EIO=4&transport=websocket&sid=rpZREsvIW7N8rXhyAAAE HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:59] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:59] "GET /socket.io/?EIO=4&transport=polling&t=Pqmw-Kc HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:59] "POST /socket.io/?EIO=4&transport=polling&t=Pqmw-L2&sid=ddjvPAosSQ8NbKJGAAAG HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:59] "GET /socket.io/?EIO=4&transport=polling&t=Pqmw-L6&sid=ddjvPAosSQ8NbKJGAAAG HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:10:59] "GET /socket.io/?EIO=4&transport=polling&t=Pqmw-LH&sid=ddjvPAosSQ8NbKJGAAAG HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:11:00] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:11:00] "GET /socket.io/?EIO=4&transport=websocket&sid=ddjvPAosSQ8NbKJGAAAG HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:11:00] "GET /socket.io/?EIO=4&transport=polling&t=Pqmw-iY HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:11:00] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:11:00] "POST /socket.io/?EIO=4&transport=polling&t=Pqmw-ik&sid=uAWu_oH8Bz1GWtgrAAAI HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:11:00] "GET /socket.io/?EIO=4&transport=polling&t=Pqmw-il&sid=uAWu_oH8Bz1GWtgrAAAI HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:11:03] "GET /positions HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:11:03] "GET /socket.io/?EIO=4&transport=websocket&sid=uAWu_oH8Bz1GWtgrAAAI HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:11:03] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:11:03] "GET /socket.io/?EIO=4&transport=polling&t=Pqmw_HE HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:11:03] "POST /socket.io/?EIO=4&transport=polling&t=Pqmw_HO&sid=v9Vo1Tl8PtkwaPqxAAAK HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:11:03] "GET /socket.io/?EIO=4&transport=polling&t=Pqmw_HP&sid=v9Vo1Tl8PtkwaPqxAAAK HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:11:03] "GET /socket.io/?EIO=4&transport=polling&t=Pqmw_Ha&sid=v9Vo1Tl8PtkwaPqxAAAK HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:11:04] "GET /socket.io/?EIO=4&transport=websocket&sid=v9Vo1Tl8PtkwaPqxAAAK HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:45] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:45] "GET /socket.io/?EIO=4&transport=polling&t=Pqmxcru HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:45] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:45] "POST /socket.io/?EIO=4&transport=polling&t=PqmxcsA&sid=9PGovTOXtmpzsRdTAAAM HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:45] "GET /socket.io/?EIO=4&transport=polling&t=PqmxcsD&sid=9PGovTOXtmpzsRdTAAAM HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:45] "GET /socket.io/?EIO=4&transport=polling&t=PqmxcsT&sid=9PGovTOXtmpzsRdTAAAM HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:46] "GET /positions HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:46] "GET /socket.io/?EIO=4&transport=websocket&sid=9PGovTOXtmpzsRdTAAAM HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:46] "GET /socket.io/?EIO=4&transport=polling&t=PqmxdCz HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:46] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:46] "POST /socket.io/?EIO=4&transport=polling&t=PqmxdD7&sid=-r2rTXuyJdqTUxuRAAAO HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:46] "GET /socket.io/?EIO=4&transport=polling&t=PqmxdDB&sid=-r2rTXuyJdqTUxuRAAAO HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:46] "GET /socket.io/?EIO=4&transport=polling&t=PqmxdDK&sid=-r2rTXuyJdqTUxuRAAAO HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:48] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:48] "GET /socket.io/?EIO=4&transport=websocket&sid=-r2rTXuyJdqTUxuRAAAO HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:48] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:48] "GET /socket.io/?EIO=4&transport=polling&t=PqmxdaV HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:48] "POST /socket.io/?EIO=4&transport=polling&t=Pqmxdai&sid=AJPVg5sm2rH43sQdAAAQ HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:48] "GET /socket.io/?EIO=4&transport=polling&t=Pqmxdaj&sid=AJPVg5sm2rH43sQdAAAQ HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:48] "GET /socket.io/?EIO=4&transport=polling&t=Pqmxdaz&sid=AJPVg5sm2rH43sQdAAAQ HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:50] "GET /positions HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:51] "GET /socket.io/?EIO=4&transport=websocket&sid=AJPVg5sm2rH43sQdAAAQ HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:51] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:51] "GET /socket.io/?EIO=4&transport=polling&t=PqmxeGX HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:51] "POST /socket.io/?EIO=4&transport=polling&t=PqmxeGp&sid=3X8tBRgu3izxEcvKAAAS HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:51] "GET /socket.io/?EIO=4&transport=polling&t=PqmxeGr&sid=3X8tBRgu3izxEcvKAAAS HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:51] "GET /socket.io/?EIO=4&transport=polling&t=PqmxeHH&sid=3X8tBRgu3izxEcvKAAAS HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:52] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:52] "GET /socket.io/?EIO=4&transport=websocket&sid=3X8tBRgu3izxEcvKAAAS HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:52] "GET /socket.io/?EIO=4&transport=polling&t=PqmxedE HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:52] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:52] "POST /socket.io/?EIO=4&transport=polling&t=PqmxedP&sid=ojbFxRilFuFtTLv0AAAU HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:52] "GET /socket.io/?EIO=4&transport=polling&t=PqmxedQ&sid=ojbFxRilFuFtTLv0AAAU HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:54] "GET /positions HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:54] "GET /socket.io/?EIO=4&transport=websocket&sid=ojbFxRilFuFtTLv0AAAU HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:54] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:54] "GET /socket.io/?EIO=4&transport=polling&t=PqmxfBf HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:54] "POST /socket.io/?EIO=4&transport=polling&t=PqmxfBo&sid=K4_jF-yTsS3lQp9BAAAW HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:54] "GET /socket.io/?EIO=4&transport=polling&t=PqmxfBp&sid=K4_jF-yTsS3lQp9BAAAW HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:54] "GET /socket.io/?EIO=4&transport=polling&t=PqmxfBy&sid=K4_jF-yTsS3lQp9BAAAW HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 20:13:55] "GET /socket.io/?EIO=4&transport=websocket&sid=K4_jF-yTsS3lQp9BAAAW HTTP/1.1" 200 -

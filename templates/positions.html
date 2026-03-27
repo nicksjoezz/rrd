@@ -1,109 +1,24 @@
 {% extends "base.html" %}
 {% block title %}Positions{% endblock %}
-{% block page_title %}<span>POSITION</span> SCANNER{% endblock %}
-
-{% block extra_head %}
-<style>
-.filter-bar {
-  display: flex; align-items: center; gap: 10px;
-  margin-bottom: 16px; flex-wrap: wrap;
-}
-.filter-chip {
-  padding: 5px 12px; border: 1px solid var(--border);
-  background: var(--bg2); color: var(--text-dim);
-  font-family: var(--font-hud); font-size: 9px; letter-spacing: 0.12em;
-  cursor: pointer; transition: all 0.15s; text-transform: uppercase;
-  user-select: none;
-}
-.filter-chip:hover, .filter-chip.active {
-  border-color: var(--green); color: var(--green); background: var(--green-lo);
-}
-.scan-ping {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 10px; color: var(--text-dim); margin-left: auto;
-  font-family: var(--font-hud); letter-spacing: 0.1em;
-}
-.scanner-line {
-  height: 2px; background: linear-gradient(90deg, transparent, var(--green), transparent);
-  animation: scanner-sweep 2s linear infinite;
-  position: relative; overflow: hidden; margin-bottom: 2px;
-}
-@keyframes scanner-sweep {
-  0%   { background-position: -100% 0; opacity: 0.4; }
-  50%  { opacity: 1; }
-  100% { background-position: 200% 0; opacity: 0.4; }
-}
-.pos-row td { transition: background 0.3s; }
-.pos-row.new-flash td { background: rgba(0,255,65,0.07); }
-.emode-badge { font-size: 8px; color: var(--purple); border-color: var(--purple) !important; }
-.velocity-neg { color: var(--red); font-size: 10px; }
-.velocity-pos { color: var(--green); font-size: 10px; }
-.ttl-bar {
-  height: 3px; width: 80px; background: var(--bg);
-  border: 1px solid var(--border); overflow: hidden; display: inline-block;
-  vertical-align: middle; margin-right: 6px;
-}
-.ttl-fill { height: 100%; background: var(--amber); transition: width 1s; }
-</style>
-{% endblock %}
+{% block page_title %}POSITION SCANNER{% endblock %}
 
 {% block content %}
-<div class="filter-bar">
-  <span class="filter-chip active" data-filter="all" onclick="setFilter(this,'all')">ALL</span>
-  <span class="filter-chip" data-filter="crit" onclick="setFilter(this,'crit')">CRITICAL (&lt;1.0)</span>
-  <span class="filter-chip" data-filter="warn" onclick="setFilter(this,'warn')">DANGER (1.0–1.05)</span>
-  <span class="filter-chip" data-filter="watch" onclick="setFilter(this,'watch')">WATCHING (1.05–1.15)</span>
-
-  <div class="scan-ping">
-    <div class="scanner-line" style="width:80px"></div>
-    SCANNING LIVE
-  </div>
-</div>
-
-<!-- Summary row -->
-<div class="grid-4 animate-in" style="margin-bottom:16px">
-  <div class="stat-block">
-    <div class="stat-label">Critical (HF&lt;1.0)</div>
-    <div class="stat-value" id="cnt-crit" style="font-size:22px;color:var(--red)">0</div>
-  </div>
-  <div class="stat-block">
-    <div class="stat-label">Danger (1.0–1.05)</div>
-    <div class="stat-value" id="cnt-warn" style="font-size:22px;color:var(--amber)">0</div>
-  </div>
-  <div class="stat-block">
-    <div class="stat-label">Watching (1.05–1.15)</div>
-    <div class="stat-value" id="cnt-watch" style="font-size:22px">0</div>
-  </div>
-  <div class="stat-block">
-    <div class="stat-label">Total Tracked</div>
-    <div class="stat-value" id="cnt-total" style="font-size:22px">0</div>
-  </div>
-</div>
-
 <div class="card animate-in">
-  <div class="card-header">
-    <div class="card-title"><span class="dot"></span> Live Positions</div>
-    <span id="pos-count" style="font-size:10px;color:var(--text-dim)">0 positions</span>
+  <div class="card-header"><div class="card-title">Zombies (Persistence Queue)</div></div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>USER</th><th>PROTOCOL</th><th>HF</th><th>DEBT</th><th>QUEUED</th></tr></thead>
+      <tbody id="zombie-body"></tbody>
+    </table>
   </div>
-  <div class="card-body" style="padding:0">
-    <table class="data-table" id="positions-table">
-      <thead>
-        <tr>
-          <th>ADDRESS</th>
-          <th>PROTOCOL</th>
-          <th>HEALTH FACTOR</th>
-          <th>VELOCITY</th>
-          <th>DEBT USD</th>
-          <th>COLLATERAL</th>
-          <th>UPDATED</th>
-          <th>STATUS</th>
-        </tr>
-      </thead>
-      <tbody id="positions-body">
-        <tr><td colspan="8" class="dim" style="text-align:center;padding:32px">
-          Waiting for position data…
-        </td></tr>
-      </tbody>
+</div>
+
+<div class="card animate-in" style="margin-top:25px">
+  <div class="card-header"><div class="card-title">Active Positions (High Risk)</div></div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>USER</th><th>PROTOCOL</th><th>HF</th><th>DEBT</th><th>STATUS</th></tr></thead>
+      <tbody id="positions-body"></tbody>
     </table>
   </div>
 </div>
@@ -111,81 +26,16 @@
 
 {% block scripts %}
 <script>
-let allPositions = [];
-let activeFilter = 'all';
-
-function setFilter(el, f) {
-  document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
-  el.classList.add('active');
-  activeFilter = f;
-  renderPositions();
-}
-
-function onPositions(positions) {
-  allPositions = positions;
-  renderPositions();
-  const crit  = positions.filter(p => p.health_factor < 1.0).length;
-  const warn  = positions.filter(p => p.health_factor >= 1.0 && p.health_factor < 1.05).length;
-  const watch = positions.filter(p => p.health_factor >= 1.05).length;
-  setEl('cnt-crit',  crit);
-  setEl('cnt-warn',  warn);
-  setEl('cnt-watch', watch);
-  setEl('cnt-total', positions.length);
-}
-
-function renderPositions() {
-  const filtered = allPositions.filter(p => {
-    if (activeFilter === 'crit')  return p.health_factor < 1.0;
-    if (activeFilter === 'warn')  return p.health_factor >= 1.0 && p.health_factor < 1.05;
-    if (activeFilter === 'watch') return p.health_factor >= 1.05;
-    return true;
-  });
-
-  setEl('pos-count', filtered.length + ' positions');
-  const tbody = document.getElementById('positions-body');
-
-  if (!filtered.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="dim" style="text-align:center;padding:32px">No positions match filter</td></tr>';
-    return;
-  }
-
-  tbody.innerHTML = filtered.map((p, i) => {
-    const hf   = parseFloat(p.health_factor) || 0;
-    const pct  = Math.min(hf / 1.2 * 100, 100);
-    const cls  = hf < 1.0 ? 'crit' : hf < 1.05 ? 'warn' : 'ok';
-    const col  = hf < 1.0 ? 'red'  : hf < 1.05 ? 'amber' : 'green';
-
-    const updated = p.last_updated
-      ? new Date(p.last_updated * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
-      : '—';
-
-    let statusBadge;
-    if (hf < 1.0)         statusBadge = '<span class="badge badge-red">LIQUIDATABLE</span>';
-    else if (hf < 1.05)   statusBadge = '<span class="badge badge-amber">DANGER</span>';
-    else                  statusBadge = '<span class="badge badge-green">WATCHING</span>';
-
-    const colToken = (p.collateral_token || '').slice(0, 8) || '—';
-
-    return `<tr class="pos-row" id="pos-${i}">
-      <td class="mono cyan" style="font-size:10px">${fmtAddr(p.address)}</td>
-      <td><span class="badge badge-cyan" style="font-size:8px">${p.protocol||'—'}</span></td>
-      <td>
-        <div class="hf-bar-wrap">
-          <div class="hf-bar" style="width:80px">
-            <div class="hf-fill ${cls}" style="width:${pct}%"></div>
-          </div>
-          <span class="${col}" style="font-family:var(--font-hud);font-size:11px">
-            ${hf.toFixed(5)}
-          </span>
-        </div>
-      </td>
-      <td><span class="velocity-neg">—</span></td>
-      <td class="green">${fmtUSD(p.total_debt_usd)}</td>
-      <td class="amber dim" style="font-size:10px">${colToken}</td>
-      <td class="dim" style="font-size:9px">${updated}</td>
-      <td>${statusBadge}</td>
-    </tr>`;
+function onPositions(pos) {
+  const body = document.getElementById('positions-body');
+  body.innerHTML = pos.map(p => {
+    const badge = p.health_factor < 1.0 ? '<span class="badge badge-red">LIQUIDATABLE</span>' : '<span class="badge badge-amber">DANGER</span>';
+    return `<tr><td class="green">${fmtAddr(p.address)}</td><td>${p.protocol}</td><td class="${p.health_factor<1?'red':'amber'}">${p.health_factor.toFixed(5)}</td><td>${fmtUSD(p.total_debt_usd)}</td><td>${badge}</td></tr>`;
   }).join('');
+}
+function onZombies(z) {
+  const body = document.getElementById('zombie-body');
+  body.innerHTML = Object.entries(z).map(([k, v]) => `<tr><td class="amber">${fmtAddr(v.user)}</td><td>${v.protocol}</td><td class="amber">${v.health_factor.toFixed(5)}</td><td class="green">${fmtUSD(v.total_debt_usd)}</td><td>${new Date(v.queued_at*1000).toLocaleTimeString()}</td></tr>`).join('');
 }
 </script>
 {% endblock %}

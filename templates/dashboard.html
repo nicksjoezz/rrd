@@ -1,115 +1,39 @@
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
-{% block page_title %}<span>DASH</span>BOARD{% endblock %}
-
-{% block extra_head %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<style>
-.live-tag {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-size: 9px; color: var(--green); font-family: var(--font-hud);
-  letter-spacing: 0.15em;
-}
-.live-tag::before {
-  content: ''; width: 5px; height: 5px; border-radius: 50%;
-  background: var(--green); box-shadow: 0 0 6px var(--green);
-  animation: pulse-dot 1.5s ease-in-out infinite;
-}
-.activity-item {
-  display: flex; gap: 14px; padding: 11px 0;
-  border-bottom: 1px solid var(--text-lo)18;
-  animation: fadeUp 0.3s ease both;
-}
-.activity-item:last-child { border-bottom: none; }
-.activity-time { font-size: 10px; color: var(--text-lo); min-width: 75px; letter-spacing: 0.03em; }
-.activity-body { flex: 1; font-size: 11px; }
-.activity-profit { font-family: var(--font-hud); font-size: 12px; color: var(--green); min-width: 70px; text-align: right; }
-.protocol-dot {
-  display: inline-block; width: 6px; height: 6px;
-  border-radius: 50%; margin-right: 5px; vertical-align: middle;
-}
-.sparkline-wrap { position: relative; height: 80px; margin-top: 8px; }
-#profit-chart-wrap { position: relative; height: 200px; }
-</style>
-{% endblock %}
+{% block page_title %}DASHBOARD{% endblock %}
 
 {% block content %}
-<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px">
-  <div class="stat-block animate-in">
-    <div class="stat-label">Total Profit Est.</div>
-    <div class="stat-value" id="d-total-profit">$0.00</div>
-    <div class="stat-sub" id="d-today-profit" style="color:var(--green)">Today: $0.00</div>
+<div class="stat-grid animate-in">
+  <div class="stat-card">
+    <div class="stat-label">Total Profit</div>
+    <div class="stat-value" id="d-profit">$0.00</div>
   </div>
-  <div class="stat-block animate-in">
+  <div class="stat-card">
     <div class="stat-label">Liquidations</div>
-    <div class="stat-value" id="d-total-liqs">0</div>
-    <div class="stat-sub" id="d-today-liqs">Today: 0</div>
+    <div class="stat-value" id="d-liqs">0</div>
   </div>
-  <div class="stat-block animate-in">
-    <div class="stat-label">Borrowers Tracked</div>
-    <div class="stat-value" id="d-borrowers">0</div>
-    <div class="stat-sub">Across all protocols</div>
-  </div>
-  <div class="stat-block animate-in">
-    <div class="stat-label">Watching (Zombie)</div>
-    <div class="stat-value" id="d-zombie">—</div>
-    <div class="stat-sub">HF 0.95 – 1.05</div>
+  <div class="stat-card">
+    <div class="stat-label">Active Zombies</div>
+    <div class="stat-value" id="d-zombie">0</div>
   </div>
 </div>
 
-<div class="grid-2 animate-in" style="margin-bottom:16px">
-  <!-- Profit chart -->
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title"><span class="dot"></span> 30-Day Profit History</div>
-      <span class="live-tag">LIVE</span>
-    </div>
-    <div class="card-body">
-      <div id="profit-chart-wrap"><canvas id="profit-chart"></canvas></div>
-    </div>
-  </div>
-
-  <!-- Approaching positions -->
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title"><span class="dot"></span> Approaching Liquidation</div>
-      <a href="/positions" class="btn btn-sm" style="text-decoration:none">VIEW ALL →</a>
-    </div>
-    <div class="card-body" style="padding:0">
-      <table class="data-table" id="approaching-tbl">
-        <thead>
-          <tr>
-            <th>ADDRESS</th>
-            <th>PROTOCOL</th>
-            <th>HEALTH</th>
-            <th>DEBT</th>
-          </tr>
-        </thead>
-        <tbody id="approaching-body">
-          <tr><td colspan="4" class="dim" style="text-align:center;padding:24px">Scanning…</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-</div>
-
-<!-- Recent liquidations -->
 <div class="card animate-in">
-  <div class="card-header">
-    <div class="card-title"><span class="dot"></span> Recent Liquidations</div>
-    <span class="live-tag">LIVE</span>
+  <div class="card-header"><div class="card-title">Approaching Liquidation (Live)</div></div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>BORROWER</th><th>PROTOCOL</th><th>HF</th><th>DEBT</th></tr></thead>
+      <tbody id="approaching-body"></tbody>
+    </table>
   </div>
-  <div class="card-body" style="padding:0">
-    <table class="data-table" id="recent-tbl">
-      <thead>
-        <tr>
-          <th>TIME</th><th>BORROWER</th><th>PROTOCOL</th>
-          <th>COLLATERAL</th><th>DEBT USD</th><th>EST. PROFIT</th><th>TX</th>
-        </tr>
-      </thead>
-      <tbody id="recent-body">
-        <tr><td colspan="7" class="dim" style="text-align:center;padding:24px">No liquidations yet</td></tr>
-      </tbody>
+</div>
+
+<div class="card animate-in">
+  <div class="card-header"><div class="card-title">Recent Activity</div></div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>TIME</th><th>USER</th><th>PROFIT</th></tr></thead>
+      <tbody id="recent-body"></tbody>
     </table>
   </div>
 </div>
@@ -117,99 +41,16 @@
 
 {% block scripts %}
 <script>
-let profitChart = null;
-
 function onStats(d) {
-  setEl('d-total-profit', fmtUSD(d.total_profit_est_usd));
-  setEl('d-today-profit', 'Today: ' + fmtUSD(d.today_profit_est_usd));
-  setEl('d-total-liqs',   d.total_liquidations);
-  setEl('d-today-liqs',   'Today: ' + d.today_liquidations);
-  setEl('d-borrowers',    fmtNum(d.total_borrowers));
-
-  // Recent liquidations table
-  const tbody = document.getElementById('recent-body');
-  if (d.recent && d.recent.length) {
-    tbody.innerHTML = d.recent.map(r => {
-      const t = new Date(r.timestamp * 1000);
-      const ts = t.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-      const profit = parseFloat(r.estimated_profit) || 0;
-      const pColor = profit > 0 ? 'green' : 'red';
-      const tx = r.tx_hash ? r.tx_hash.slice(0,10)+'…' : '—';
-      return `<tr>
-        <td class="dim">${ts}</td>
-        <td class="mono cyan">${fmtAddr(r.borrower)}</td>
-        <td><span class="badge badge-cyan">${r.protocol||'—'}</span></td>
-        <td class="amber">${(r.collateral_token||'').slice(0,8)}</td>
-        <td>${fmtUSD(r.debt_covered_usd)}</td>
-        <td class="${pColor}">${fmtUSD(profit)}</td>
-        <td class="dim" style="font-size:9px">${tx}</td>
-      </tr>`;
-    }).join('');
-  }
+  setEl('d-profit', fmtUSD(d.total_profit_est_usd));
+  setEl('d-liqs', d.total_liquidations);
+  const body = document.getElementById('recent-body');
+  body.innerHTML = (d.recent||[]).slice(0,5).map(r => `<tr><td>${new Date(r.timestamp*1000).toLocaleTimeString()}</td><td class="green">${fmtAddr(r.borrower)}</td><td class="amber">${fmtUSD(r.estimated_profit)}</td></tr>`).join('');
 }
-
-function onPositions(positions) {
-  const tbody = document.getElementById('approaching-body');
-  setEl('d-zombie', positions.filter(p => p.health_factor >= 0.95 && p.health_factor <= 1.05).length);
-
-  if (!positions.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="dim" style="text-align:center;padding:20px">Market healthy</td></tr>';
-    return;
-  }
-
-  tbody.innerHTML = positions.slice(0,8).map(p => {
-    const hf = parseFloat(p.health_factor) || 0;
-    const pct = Math.min(hf / 1.2 * 100, 100);
-    const cls = hf < 1.0 ? 'crit' : hf < 1.05 ? 'warn' : 'ok';
-    const col = hf < 1.0 ? 'red' : hf < 1.05 ? 'amber' : 'text';
-    return `<tr>
-      <td class="mono dim">${fmtAddr(p.address)}</td>
-      <td><span class="badge badge-cyan" style="font-size:8px">${p.protocol||'—'}</span></td>
-      <td>
-        <div class="hf-bar-wrap">
-          <div class="hf-bar"><div class="hf-fill ${cls}" style="width:${pct}%"></div></div>
-          <span class="${col}" style="font-size:10px;font-family:var(--font-hud)">${hf.toFixed(4)}</span>
-        </div>
-      </td>
-      <td class="green" style="font-size:10px">${fmtUSD(p.total_debt_usd)}</td>
-    </tr>`;
-  }).join('');
+function onPositions(pos) {
+  const body = document.getElementById('approaching-body');
+  body.innerHTML = pos.slice(0,10).map(p => `<tr><td>${fmtAddr(p.address)}</td><td><span class="badge badge-green">${p.protocol}</span></td><td class="${p.health_factor<1?'red':'amber'}">${p.health_factor.toFixed(4)}</td><td class="green">${fmtUSD(p.total_debt_usd)}</td></tr>`).join('');
 }
-
-// Load profit chart
-async function loadChart() {
-  const r = await fetch('/api/profit-history');
-  const data = await r.json();
-  if (!data.length) return;
-
-  const labels = data.map(d => d.day).reverse();
-  const profits = data.map(d => d.profit).reverse();
-
-  const ctx = document.getElementById('profit-chart').getContext('2d');
-  profitChart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [{
-        label: 'Est. Profit',
-        data: profits,
-        backgroundColor: profits.map(v => v > 0 ? '#00ff4133' : '#ff224433'),
-        borderColor: profits.map(v => v > 0 ? '#00ff41' : '#ff2244'),
-        borderWidth: 1,
-      }]
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { grid: { color: '#00ff4112' }, ticks: { color: '#5a8a62', font: { family: 'IBM Plex Mono', size: 10 } } },
-        y: { grid: { color: '#00ff4112' }, ticks: { color: '#5a8a62', font: { family: 'IBM Plex Mono', size: 10 },
-          callback: v => '$' + v.toFixed(0) } }
-      }
-    }
-  });
-}
-
-loadChart();
+function onZombies(z) { setEl('d-zombie', Object.keys(z).length); }
 </script>
 {% endblock %}
