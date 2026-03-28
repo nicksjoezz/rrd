@@ -411,14 +411,6 @@ class MultiProtocolMonitor:
                     f"[{name}] Incremental: blocks {from_block:,} -> {current_block:,}"
                 )
 
-        # -- Load manually added/persistent zombies into monitors ----------------
-        zombies = self.zombie_queue.get_watching()
-        for z in zombies:
-            proto = z.get("protocol")
-            user  = z.get("user")
-            if proto and user and proto in self.monitors:
-                self.monitors[proto]._borrowers.add(user.lower())
-                logger.debug(f"[ZOMBIE] Loaded {user[:8]} from persistence into {proto} monitor")
 
         # -- Start incremental scan --------------------------------------------
         for name, monitor in self.monitors.items():

@@ -97,6 +97,7 @@ class LiquidationExecutor:
             debt_info = token_map.get(debt_token.lower(), {"decimals": 18})
             min_profit_wei = int((target_profit_usd / debt_price) * (10 ** debt_info["decimals"]))
 
+        if is_multi:
             path = swap_params.get("path", b"")
             if isinstance(path, str) and path.startswith("0x"):
                 path = bytes.fromhex(path[2:])

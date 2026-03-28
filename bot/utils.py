@@ -207,7 +207,18 @@ LIQUIDATOR_CONTRACT_ABI = json.loads('''[
      {"name":"borrower","type":"address"},
      {"name":"debtAmount","type":"uint256"},
      {"name":"lendingPool","type":"address"},
-     {"name":"swapFee","type":"uint24"}
+     {"name":"swapFee","type":"uint24"},
+     {"name":"minProfit","type":"uint256"}
+   ],"outputs":[]},
+  {"name":"executeLiquidationMultiHop","type":"function","stateMutability":"nonpayable",
+   "inputs":[
+     {"name":"debtToken","type":"address"},
+     {"name":"collateralToken","type":"address"},
+     {"name":"borrower","type":"address"},
+     {"name":"debtAmount","type":"uint256"},
+     {"name":"lendingPool","type":"address"},
+     {"name":"swapPath","type":"bytes"},
+     {"name":"minProfit","type":"uint256"}
    ],"outputs":[]},
   {"name":"withdraw","type":"function","stateMutability":"nonpayable",
    "inputs":[{"name":"token","type":"address"}],"outputs":[]},

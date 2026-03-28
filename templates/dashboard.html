@@ -34,7 +34,7 @@
 {% endblock %}
 
 {% block content %}
-<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px">
+<div class="grid-4" style="margin-bottom:24px">
   <div class="stat-block animate-in">
     <div class="stat-label">Total Profit Est.</div>
     <div class="stat-value" id="d-total-profit">$0.00</div>
@@ -76,6 +76,7 @@
       <a href="/positions" class="btn btn-sm" style="text-decoration:none">VIEW ALL →</a>
     </div>
     <div class="card-body" style="padding:0">
+    <div class="table-responsive">
       <table class="data-table" id="approaching-tbl">
         <thead>
           <tr>
@@ -100,7 +101,8 @@
     <span class="live-tag">LIVE</span>
   </div>
   <div class="card-body" style="padding:0">
-    <table class="data-table" id="recent-tbl">
+    <div class="table-responsive">
+      <table class="data-table" id="recent-tbl">
       <thead>
         <tr>
           <th>TIME</th><th>BORROWER</th><th>PROTOCOL</th>
@@ -111,6 +113,7 @@
         <tr><td colspan="7" class="dim" style="text-align:center;padding:24px">No liquidations yet</td></tr>
       </tbody>
     </table>
+    </div>
   </div>
 </div>
 {% endblock %}
@@ -150,7 +153,7 @@ function onStats(d) {
 
 function onPositions(positions) {
   const tbody = document.getElementById('approaching-body');
-  setEl('d-zombie', positions.filter(p => p.health_factor >= 0.95 && p.health_factor <= 1.05).length);
+  setEl('d-zombie', positions.filter(p => p.is_zombie).length);
 
   if (!positions.length) {
     tbody.innerHTML = '<tr><td colspan="4" class="dim" style="text-align:center;padding:20px">Market healthy</td></tr>';

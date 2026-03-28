@@ -85,6 +85,12 @@
 
 /* ── Settings layout ─────────────────────────────────────────────────── */
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+
+@media (max-width: 900px) {
+  .settings-grid { grid-template-columns: 1fr; }
+  .mode-banner { flex-direction: column; gap: 20px; text-align: center; }
+  .mode-desc { max-width: 100%; }
+}
 .settings-section { margin-bottom: 28px; }
 .section-title {
   font-family: var(--font-hud); font-size: 9px; letter-spacing: 0.3em;

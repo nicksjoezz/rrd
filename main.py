@@ -100,6 +100,21 @@ def _bot_loop():
         streamer = WebSocketStreamer()
         streamer.start()
 
+        # Load manually added/persistent zombies into monitors
+        # We also need to add these to the monitor discovery list
+        from bot.zombie_queue import ZombieQueue
+        zq = ZombieQueue(
+            entry_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("entry_hf", 1.05)),
+            fire_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("fire_hf", 1.0))
+        )
+        zombies = zq.get_watching()
+        for z in zombies:
+            proto = z.get("protocol")
+            user  = z.get("user")
+            if proto and user and proto in monitor.monitors:
+                monitor.monitors[proto]._borrowers.add(user.lower())
+                logger.info(f"[ZOMBIE] Loaded {user[:8]} from persistence into {proto} monitor")
+
         # ── Load borrowers ────────────────────────────────────────────────────
         logger.info("Loading borrower history (DB cache -> event scan)...")
         monitor.load_all_borrowers()
@@ -309,7 +324,50 @@ def api_profit_history():
 
 @app.route("/api/positions")
 def api_positions():
-    return jsonify(get_approaching_positions())
+    # 1. Get positions from database (approaching liquidation)
+    positions = get_approaching_positions()
+
+    # 2. Get positions from zombie queue (monitored but not yet in DB or with different HF)
+    # We want to merge them to ensure everything in zombies.json is visible
+    try:
+        from bot.monitor import MultiProtocolMonitor
+        # Note: In a real app, you might want to share the monitor instance
+        # but here we'll just read from the queue directly if possible
+        # or rely on the fact that scan_all_protocols already calls upsert_position
+
+        # However, to be sure we show everything in the zombie queue:
+        from bot.zombie_queue import ZombieQueue
+        zq = ZombieQueue(
+            entry_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("entry_hf", 1.05)),
+            fire_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("fire_hf", 1.0))
+        )
+        zombies = zq.get_watching()
+
+        # Merge logic: if user+protocol already in positions, update it; else append.
+        pos_map = {f"{p['protocol']}:{p['address'].lower()}": p for p in positions}
+        for z in zombies:
+            key = f"{z['protocol']}:{z['user'].lower()}"
+            if key not in pos_map:
+                # Convert zombie format to position format
+                pos_map[key] = {
+                    "address":          z["user"],
+                    "protocol":         z["protocol"],
+                    "health_factor":    z.get("health_factor"),
+                    "total_debt_usd":   z.get("total_debt_usd"),
+                    "total_col_usd":    z.get("total_col_usd"),
+                    "collateral_token": z.get("collateral_token"),
+                    "debt_token":       z.get("debt_token"),
+                    "last_updated":     z.get("queued_at"),
+                    "is_zombie":        True
+                }
+            else:
+                pos_map[key]["is_zombie"] = True
+
+        positions = sorted(pos_map.values(), key=lambda x: x.get("health_factor", 9.9))
+    except Exception as e:
+        logger.error(f"Error merging zombie positions: {e}")
+
+    return jsonify(positions)
 
 @app.route("/api/logs")
 def api_logs():
@@ -767,7 +825,7 @@ def main():
     print(f"  Bot:        {bot_status}")
     print(f"{'═'*56}\n")
 
-    socketio.run(app, host=args.host, port=args.port, debug=False, log_output=False)
+    socketio.run(app, host=args.host, port=args.port, debug=False, log_output=False, allow_unsafe_werkzeug=True)
 
 
 if __name__ == "__main__":

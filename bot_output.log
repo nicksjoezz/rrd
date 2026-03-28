@@ -1,0 +1,31 @@
+2026-03-28 10:10:28 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
+Werkzeug appears to be used in a production deployment. Consider switching to a production web server instead.
+
+════════════════════════════════════════════════════════
+  LiqBot  →  http://localhost:5000
+  Mode:       SIMULATE
+  Bot:        manual start required (--no-bot flag)
+════════════════════════════════════════════════════════
+
+ * Serving Flask app 'main'
+ * Debug mode: off
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.0.2:5000
+[33mPress CTRL+C to quit[0m
+127.0.0.1 - - [28/Mar/2026 10:10:32] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [28/Mar/2026 10:10:32] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [28/Mar/2026 10:10:32] "GET /socket.io/?EIO=4&transport=polling&t=Pqpx8Sn HTTP/1.1" 200 -
+127.0.0.1 - - [28/Mar/2026 10:10:32] "GET /api/profit-history HTTP/1.1" 200 -
+127.0.0.1 - - [28/Mar/2026 10:10:32] "POST /socket.io/?EIO=4&transport=polling&t=Pqpx8VI&sid=lDUG6bRqnInkvaT5AAAA HTTP/1.1" 200 -
+127.0.0.1 - - [28/Mar/2026 10:10:32] "GET /socket.io/?EIO=4&transport=polling&t=Pqpx8VK&sid=lDUG6bRqnInkvaT5AAAA HTTP/1.1" 200 -
+127.0.0.1 - - [28/Mar/2026 10:10:32] "GET /socket.io/?EIO=4&transport=polling&t=Pqpx8Vg&sid=lDUG6bRqnInkvaT5AAAA HTTP/1.1" 200 -
+127.0.0.1 - - [28/Mar/2026 10:10:32] "GET /socket.io/?EIO=4&transport=polling&t=Pqpx8Vv&sid=lDUG6bRqnInkvaT5AAAA HTTP/1.1" 200 -
+127.0.0.1 - - [28/Mar/2026 10:10:36] "GET /positions HTTP/1.1" 200 -
+127.0.0.1 - - [28/Mar/2026 10:10:36] "GET /socket.io/?EIO=4&transport=websocket&sid=lDUG6bRqnInkvaT5AAAA HTTP/1.1" 200 -
+127.0.0.1 - - [28/Mar/2026 10:10:36] "GET /api/mode HTTP/1.1" 200 -
+127.0.0.1 - - [28/Mar/2026 10:10:36] "GET /socket.io/?EIO=4&transport=polling&t=Pqpx9XE HTTP/1.1" 200 -
+127.0.0.1 - - [28/Mar/2026 10:10:36] "POST /socket.io/?EIO=4&transport=polling&t=Pqpx9XO&sid=UkanJkl91M0mTWzaAAAC HTTP/1.1" 200 -
+127.0.0.1 - - [28/Mar/2026 10:10:36] "GET /socket.io/?EIO=4&transport=polling&t=Pqpx9XQ&sid=UkanJkl91M0mTWzaAAAC HTTP/1.1" 200 -
+127.0.0.1 - - [28/Mar/2026 10:10:37] "GET /socket.io/?EIO=4&transport=websocket&sid=UkanJkl91M0mTWzaAAAC HTTP/1.1" 200 -
