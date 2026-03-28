@@ -119,7 +119,10 @@ def estimate_profit_usd(position: dict) -> dict:
     max_fee_gwei    = cfg("gas", "max_fee_per_gas_gwei")
     eth_price       = get_token_price_usd("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1")
     if eth_price == 0:
-        eth_price = cfg("oracle", "fallback_eth_price") or 3000.0
+        try:
+            eth_price = cfg("oracle", "fallback_eth_price") or 3000.0
+        except KeyError:
+            eth_price = 3000.0
 
     # L2 Execution cost
     l2_gas_cost_eth = (gas_limit * max_fee_gwei * 1e9) / 1e18

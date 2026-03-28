@@ -474,6 +474,10 @@ class MultiProtocolMonitor:
                             logger.info(f"[STREAMS] Triggering immediate execution for {len(liquidatable)} positions")
                             self.on_liquidatable(liquidatable)
 
+                        # Immediately persist found positions for UI visibility
+                        for pos in found:
+                            upsert_position(pos)
+
                 monitor.load_borrowers_from_events(from_block, current_block, on_batch_found=_streaming_callback)
 
     def refresh_borrowers(self):
@@ -501,6 +505,10 @@ class MultiProtocolMonitor:
                         if liquidatable and self.on_liquidatable:
                             logger.info(f"[REFRESH] Triggering immediate execution for {len(liquidatable)} positions")
                             self.on_liquidatable(liquidatable)
+
+                        # Immediately persist found positions for UI visibility
+                        for pos in found:
+                            upsert_position(pos)
 
                 monitor.load_borrowers_from_events(from_block, current_block, on_batch_found=_streaming_callback)
 

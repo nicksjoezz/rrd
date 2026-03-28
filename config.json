@@ -158,6 +158,7 @@
       "LINK_USD": "0x86e53CF1B873786AC9cC2cE1d567A64D7609eE58",
       "GMX_USD": "0xDB98056FecFff59D032aB628337A4887110df3dB"
     },
+    "fallback_eth_price": 3000.0,
     "price_drop_trigger_pct": 2.0
   },
   "notifications": {

@@ -81,7 +81,13 @@ def _bot_loop():
         def _immediate_execution_callback(positions):
             """Callback for high-priority immediate execution from streaming discovery."""
             logger.info(f"[STREAM] Immediate execution triggered for {len(positions)} positions")
-            _process_and_execute(positions, executor, tuner)
+            # Run execution in a separate thread so discovery is not blocked
+            threading.Thread(
+                target=_process_and_execute,
+                args=(positions, executor, tuner),
+                daemon=True,
+                name=f"exec-{int(time.time())}"
+            ).start()
 
         monitor  = MultiProtocolMonitor(on_liquidatable=_immediate_execution_callback)
         _emerg   = threading.Event()
@@ -808,10 +814,12 @@ def _push_loop():
                     "cycle":     _bot_stats["cycle"],
                     "last_scan": _bot_stats["last_scan"],
                 })
-                socketio.emit("positions",  get_merged_positions()[:20])
+                # Send more positions to ensure frontend has enough to display/filter
+                socketio.emit("positions",  get_merged_positions()[:100])
             except Exception:
                 pass
-        time.sleep(3)
+        # Increase frequency during initial scan
+        time.sleep(1)
 
 
 def _log_tail():
