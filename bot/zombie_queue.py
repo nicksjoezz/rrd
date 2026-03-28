@@ -18,12 +18,14 @@ from typing import Optional
 logger = logging.getLogger("liquidation_bot.zombie")
 
 _shared_zq = None
+_zq_lock   = threading.Lock()
 
 def get_zombie_queue(entry_hf: float = 1.05, fire_hf: float = 1.0) -> 'ZombieQueue':
     global _shared_zq
-    if _shared_zq is None:
-        _shared_zq = ZombieQueue(entry_hf=entry_hf, fire_hf=fire_hf)
-    return _shared_zq
+    with _zq_lock:
+        if _shared_zq is None:
+            _shared_zq = ZombieQueue(entry_hf=entry_hf, fire_hf=fire_hf)
+        return _shared_zq
 
 
 class ZombieQueue:
@@ -47,6 +49,8 @@ class ZombieQueue:
     def _load(self):
         """Load queue from disk on startup."""
         if not os.path.exists(self.filename):
+            # Create empty if not exists to avoid repetitive "not found" checks
+            self._queue = {}
             return
         try:
             with open(self.filename, 'r') as f:
@@ -63,7 +67,10 @@ class ZombieQueue:
                 return obj
 
             self._queue = _decode_hex(data)
-            logger.info(f"[ZOMBIE] Loaded {len(self._queue)} positions from {self.filename}")
+            # Use a class-level variable or just a global to only log this once
+            if not hasattr(ZombieQueue, '_already_logged_load'):
+                logger.info(f"[ZOMBIE] Initialized with {len(self._queue)} positions from {self.filename}")
+                ZombieQueue._already_logged_load = True
         except Exception as e:
             logger.error(f"[ZOMBIE] Failed to load {self.filename}: {e}")
 

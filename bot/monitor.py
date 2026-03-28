@@ -29,12 +29,12 @@ from .utils import (
 from .swap_router import get_best_swap
 
 
-from .zombie_queue import ZombieQueue
 from .database import (
     upsert_borrowers, get_borrowers, upsert_position,
     get_last_scan_block, set_last_scan_block
 )
 from .velocity import VelocityTracker
+from .zombie_queue import ZombieQueue
 
 logger = logging.getLogger("liquidation_bot.monitor")
 
@@ -367,6 +367,8 @@ class ProtocolMonitor:
         return len(self._borrowers)
 
 
+from .zombie_queue import get_zombie_queue
+
 class MultiProtocolMonitor:
     """
     Manages multiple ProtocolMonitor instances.
@@ -375,7 +377,7 @@ class MultiProtocolMonitor:
 
     def __init__(self, on_liquidatable=None):
         self.monitors: dict = {}
-        self.zombie_queue = ZombieQueue(
+        self.zombie_queue = get_zombie_queue(
             entry_hf=cfg("strategy", "zombie_queue", "entry_hf"),
             fire_hf=cfg("strategy",  "zombie_queue", "fire_hf")
         )

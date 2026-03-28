@@ -379,13 +379,14 @@ def get_merged_positions():
         pos_map = {}
         for p in positions:
             addr = p.get('address') or p.get('user')
+            if not addr: continue
             key = f"{p['protocol']}:{addr.lower()}"
             pos_map[key] = {
                 "address":          addr,
                 "protocol":         p["protocol"],
-                "health_factor":    p.get("health_factor"),
-                "total_debt_usd":   p.get("total_debt_usd"),
-                "total_col_usd":    p.get("total_col_usd"),
+                "health_factor":    float(p.get("health_factor", 0)),
+                "total_debt_usd":   float(p.get("total_debt_usd", 0)),
+                "total_col_usd":    float(p.get("total_col_usd", 0)),
                 "collateral_token": p.get("collateral_token"),
                 "debt_token":       p.get("debt_token"),
                 "last_updated":     p.get("last_updated"),
@@ -401,12 +402,13 @@ def get_merged_positions():
 
         for z in zombies:
             key = f"{z['protocol']}:{z['user'].lower()}"
+            hf = float(z.get("health_factor", 0))
             z_data = {
                 "address":          z["user"],
                 "protocol":         z["protocol"],
-                "health_factor":    z.get("health_factor"),
-                "total_debt_usd":   z.get("total_debt_usd"),
-                "total_col_usd":    z.get("total_col_usd"),
+                "health_factor":    hf,
+                "total_debt_usd":   float(z.get("total_debt_usd", 0)),
+                "total_col_usd":    float(z.get("total_col_usd", 0)),
                 "collateral_token": z.get("collateral_token"),
                 "debt_token":       z.get("debt_token"),
                 "last_updated":     z.get("queued_at"),
@@ -416,12 +418,13 @@ def get_merged_positions():
                 pos_map[key] = z_data
             else:
                 # Zombie data overrides persistent data for real-time accuracy
+                # But only if it's actually in striking distance
                 pos_map[key].update(z_data)
 
         return sorted(pos_map.values(), key=lambda x: x.get("health_factor", 9.9))
     except Exception as e:
         logger.error(f"Error merging zombie positions: {e}")
-        return positions
+        return positions if 'positions' in locals() else []
 
 @app.route("/api/positions")
 def api_positions():

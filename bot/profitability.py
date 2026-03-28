@@ -4,10 +4,13 @@ Accounts for: flash loan fee, swap slippage, gas cost, liquidation bonus
 """
 
 import logging
+import requests
+from typing import Optional
 from web3 import Web3
 from .utils import (
     get_web3, cfg, get_token_map, checksum,
-    wei_to_usd_base, ERC20_ABI, CHAINLINK_FEED_ABI
+    wei_to_usd_base, ERC20_ABI, CHAINLINK_FEED_ABI,
+    AAVE_ORACLE_ABI, ADDRESSES_PROVIDER_ABI
 )
 
 logger = logging.getLogger("liquidation_bot.profit")
@@ -15,6 +18,26 @@ logger = logging.getLogger("liquidation_bot.profit")
 # Cache prices to avoid hammering RPC
 _price_cache: dict = {}
 _price_cache_block: int = 0
+_aave_oracle_addr: Optional[str] = None
+
+def _get_aave_oracle() -> Optional[str]:
+    global _aave_oracle_addr
+    if _aave_oracle_addr: return _aave_oracle_addr
+    try:
+        w3 = get_web3()
+        # Aave V3 Pool Addresses Provider on Arbitrum
+        provider_addr = cfg("protocols", "aave_v3", "addresses_provider")
+        provider = w3.eth.contract(address=checksum(provider_addr), abi=ADDRESSES_PROVIDER_ABI)
+        _aave_oracle_addr = provider.functions.getPriceOracle().call()
+        return _aave_oracle_addr
+    except Exception: return None
+
+def _get_coingecko_eth_price() -> float:
+    """Final fallback for ETH price."""
+    try:
+        r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd", timeout=5)
+        return float(r.json()["ethereum"]["usd"])
+    except Exception: return 0.0
 
 def get_token_price_usd(token_address: str) -> float:
     """
@@ -58,6 +81,27 @@ def get_token_price_usd(token_address: str) -> float:
         sym = token_info["symbol"]
         if sym in ("USDC", "USDCe", "USDT", "DAI", "GHO"):
             return 1.0
+
+    # Fallback 2: Aave Oracle
+    oracle_addr = _get_aave_oracle()
+    if oracle_addr:
+        try:
+            oracle = w3.eth.contract(address=checksum(oracle_addr), abi=AAVE_ORACLE_ABI)
+            # Aave reports in 8 decimals for USD base
+            price = oracle.functions.getAssetPrice(checksum(token_address)).call() / 1e8
+            if price > 0:
+                _price_cache[addr] = price
+                _price_cache_block = current_block
+                return price
+        except Exception: pass
+
+    # Fallback 3: CoinGecko (ETH only)
+    if addr == "0x82af49447d8a07e3bd95bd0d56f35241523fbab1": # WETH
+        price = _get_coingecko_eth_price()
+        if price > 0:
+            _price_cache[addr] = price
+            _price_cache_block = current_block
+            return price
 
     return 0.0  # Unknown — will be excluded from profitability check
 

@@ -240,6 +240,16 @@ LIQUIDATOR_CONTRACT_ABI = json.loads('''[
    "inputs":[],"outputs":[{"type":"address"}]}
 ]''')
 
+AAVE_ORACLE_ABI = json.loads('''[
+  {"name":"getAssetPrice","type":"function","stateMutability":"view",
+   "inputs":[{"name":"asset","type":"address"}],"outputs":[{"type":"uint256"}]}
+]''')
+
+ADDRESSES_PROVIDER_ABI = json.loads('''[
+  {"name":"getPriceOracle","type":"function","stateMutability":"view",
+   "inputs":[],"outputs":[{"type":"address"}]}
+]''')
+
 # ── Multicall3 (Arbitrum) ───────────────────────────────────────────────────
 MULTICALL3_ADDR = "0xcA11bde05977b3631167028862bE2a173976CA11"
 MULTICALL3_ABI  = json.loads('[{"inputs":[{"components":[{"internalType":"address","name":"target","type":"address"},{"internalType":"bytes","name":"callData","type":"bytes"}],"internalType":"struct Multicall3.Call[]","name":"calls","type":"tuple[]"}],"name":"aggregate","outputs":[{"internalType":"uint256","name":"blockNumber","type":"uint256"},{"internalType":"bytes[]","name":"returnData","type":"bytes[]"}],"stateMutability":"payable","type":"function"}]')
