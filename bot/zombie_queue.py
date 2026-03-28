@@ -145,6 +145,14 @@ class ZombieQueue:
         with self._lock:
             return len(self._queue)
 
+    def remove(self, protocol: str, user: str):
+        """Manually remove a user from the queue (e.g. if position closed)."""
+        key = f"{protocol}:{user.lower()}"
+        with self._lock:
+            if key in self._queue:
+                self._queue.pop(key)
+                self._save()
+
     def evict_old(self, max_age_seconds: int = 3600):
         """Remove positions that have been in queue > max_age (likely recovered)."""
         now = time.time()

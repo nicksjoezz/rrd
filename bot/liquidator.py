@@ -302,6 +302,33 @@ class LiquidationExecutor:
         protocol = position.get("protocol", "unknown")
         user     = position["user"]
 
+        # ── Final On-Chain Verification ──────────────────────────────────────
+        # Confirm position is still open and liquidatable immediately before fire
+        try:
+            pool_addr = position.get("pool_address")
+            if pool_addr:
+                from .utils import AAVE_POOL_ABI, health_factor_float
+                pool = self._w3.eth.contract(address=checksum(pool_addr), abi=AAVE_POOL_ABI)
+                data = pool.functions.getUserAccountData(checksum(user)).call()
+
+                fresh_hf = health_factor_float(data[5])
+                total_debt = data[1]
+
+                if total_debt == 0:
+                    logger.info(f"[{protocol}] Skipping {user[:8]}... Position already repaid/closed")
+                    return None
+
+                if fresh_hf > 1.0 and mode == "live":
+                    # In simulate mode we still might want to see it,
+                    # but in live we MUST skip if HF > 1.0
+                    logger.info(f"[{protocol}] Skipping {user[:8]}... Position recovered (HF={fresh_hf:.4f})")
+                    return None
+
+                # Update position object with latest on-chain data
+                position["health_factor"] = fresh_hf
+        except Exception as e:
+            logger.warning(f"[{protocol}] Pre-execution verification failed for {user[:8]}: {e}")
+
         # Profitability check (runs in both modes)
         profit_info = estimate_profit_usd(position)
         if not profit_info["profitable"]:

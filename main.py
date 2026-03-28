@@ -49,7 +49,7 @@ def start_bot_engine():
             return False
         _bot_running.set()
         threading.Thread(target=_bot_loop, daemon=True, name="bot-engine").start()
-        threading.Thread(target=_discovery_loop, daemon=True, name="bot-discovery").start()
+        # discovery_loop is now unified into bot_loop to ensure immediate execution
         logger.info("Bot engine started -- scanning 24/7")
         return True
 
@@ -61,25 +61,7 @@ def stop_bot_engine():
         logger.info("Bot engine stopping...")
         return True
 
-# ── 1. Discovery Loop (Hourly) ────────────────────────────────────────────────
-def _discovery_loop():
-    """Background thread to scan for new borrowers every hour."""
-    from bot.monitor import MultiProtocolMonitor
-    monitor = MultiProtocolMonitor()
-    while _bot_running.is_set():
-        try:
-            logger.info("[DISCOVERY] Starting hourly borrower discovery...")
-            monitor.refresh_borrowers()
-            logger.info("[DISCOVERY] Discovery complete.")
-        except Exception as e:
-            logger.error(f"[DISCOVERY] Error: {e}")
-
-        # Sleep for 1 hour (3600s)
-        for _ in range(3600):
-            if not _bot_running.is_set(): return
-            time.sleep(1)
-
-# ── 2. Real-Time Monitor & Executor Loop ──────────────────────────────────────
+# ── 1. Real-Time Monitor & Executor Loop ──────────────────────────────────────
 def _bot_loop():
     try:
         from bot.monitor         import MultiProtocolMonitor
@@ -93,9 +75,15 @@ def _bot_loop():
         from bot.ws_streamer     import WebSocketStreamer
         from bot.emode_detector  import flag_emode_risk_positions
 
-        monitor  = MultiProtocolMonitor()
         executor = LiquidationExecutor()
         tuner    = get_tuner()
+
+        def _immediate_execution_callback(positions):
+            """Callback for high-priority immediate execution from streaming discovery."""
+            logger.info(f"[STREAM] Immediate execution triggered for {len(positions)} positions")
+            _process_and_execute(positions, executor, tuner)
+
+        monitor  = MultiProtocolMonitor(on_liquidatable=_immediate_execution_callback)
         _emerg   = threading.Event()
 
         # ── Emergency scan triggers ───────────────────────────────────────────
@@ -224,45 +212,45 @@ def _bot_loop():
         logger.info("Bot engine stopped")
 
 
-def _scan_and_execute(monitor, executor, tuner, emergency=False):
+def _process_and_execute(positions, executor, tuner):
     """
-    Full scan → score → filter → execute pipeline.
-    Called every cycle AND immediately on oracle/mempool signals.
-    Returns number of opportunities found.
+    Core execution pipeline: Enrich → Score → Rank → Fire.
+    Shared by both the main loop and immediate streaming callbacks.
     """
     from bot.profitability  import rank_positions
     from bot.risk_scorer    import rank_by_score
     from bot.emode_detector import flag_emode_risk_positions
     from bot.gas_manager    import is_gas_spike
 
-    # Skip gas spikes unless it's an emergency scan
-    if not emergency and is_gas_spike():
-        logger.warning("Gas spike detected -- skipping non-emergency scan")
-        return 0
-
-    # Scan all enabled protocols
-    positions = monitor.scan_all_protocols()
     if not positions:
-        logger.info("No positions near liquidation threshold")
         return 0
 
     # Enrich with E-Mode data (ETH LST depeg awareness)
     positions = flag_emode_risk_positions(positions)
 
-    # Velocity: bubble fast-falling positions to the top
-    fast = monitor.velocity.get_fast_falling(positions, velocity_threshold=-0.03)
-    if fast:
-        logger.info(f"[!] {len(fast)} fast-falling position(s) detected -- priority execution")
-        positions = fast + [p for p in positions if p not in fast]
+    # Filter out skipped collaterals
+    effective_params = tuner.get_effective_params()
+    skip_collaterals = set(effective_params.get("collateral_skip", []))
 
-    # Score by 7-factor composite (profit, bonus, urgency, velocity, size, liquidity, emode)
-    skip   = set(tuner.get_effective_params().get("collateral_skip", []))
-    ranked = rank_positions(rank_by_score(
-        [p for p in positions if p.get("collateral_symbol") not in skip]
-    ))
+    scored_positions = rank_by_score(
+        [p for p in positions if p.get("collateral_symbol") not in skip_collaterals]
+    )
+
+    # Identify positions that are at-risk but might be filtered out
+    for p in scored_positions:
+        if p.get("health_factor", 2.0) <= 1.0:
+            logger.info(f"[CRITICAL] Found liquidatable position: {p['user']} HF={p['health_factor']:.4f} "
+                        f"Debt=${p.get('total_debt_usd',0):.0f}")
+
+    ranked = rank_positions(scored_positions)
 
     if not ranked:
-        logger.info("No profitable positions after scoring and filtering")
+        # Check if we skipped any truly liquidatable ones
+        liquidatable_count = len([p for p in scored_positions if p.get("health_factor", 2.0) <= 1.0])
+        if liquidatable_count > 0:
+            logger.warning(f"Skipped {liquidatable_count} liquidatable positions because they were unprofitable or lacked routes.")
+        else:
+            logger.info("No profitable positions after scoring and filtering")
         return 0
 
     mode = (load_config() or {}).get("mode", "live")
@@ -300,6 +288,35 @@ def _scan_and_execute(monitor, executor, tuner, emergency=False):
         })
 
     return len(ranked)
+
+def _scan_and_execute(monitor, executor, tuner, emergency=False):
+    """
+    Full scan → score → filter → execute pipeline.
+    Called every cycle AND immediately on oracle/mempool signals.
+    Returns number of opportunities found.
+    """
+    from bot.gas_manager    import is_gas_spike
+
+    # Skip gas spikes unless it's an emergency scan
+    if not emergency and is_gas_spike():
+        logger.warning("Gas spike detected -- skipping non-emergency scan")
+        return 0
+
+    # Scan all enabled protocols
+    positions = monitor.scan_all_protocols()
+    if not positions:
+        logger.info("No positions near liquidation threshold")
+        return 0
+
+    # Velocity: bubble fast-falling positions to the top
+    # Note: monitor.velocity is updated inside scan_all_protocols
+    fast = monitor.velocity.get_fast_falling(positions, velocity_threshold=-0.03)
+    if fast:
+        logger.info(f"[!] {len(fast)} fast-falling position(s) detected -- priority execution")
+        # Ensure fast positions are at the start of the list
+        positions = fast + [p for p in positions if p not in fast]
+
+    return _process_and_execute(positions, executor, tuner)
 
 
 # ── Pages ─────────────────────────────────────────────────────────────────────

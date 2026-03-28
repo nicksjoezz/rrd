@@ -27,6 +27,9 @@ def upsert_borrowers(addresses: List[str], protocol: str):
 def get_borrowers(protocol: str) -> List[str]:
     return p.borrowers.get_borrowers(protocol)
 
+def remove_borrower(protocol: str, address: str):
+    p.borrowers.remove_borrower(protocol, address)
+
 def get_all_borrower_count() -> int:
     return p.borrowers.get_total_count()
 

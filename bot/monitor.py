@@ -332,7 +332,16 @@ class ProtocolMonitor:
                     user = chunk[j]
                     dec = w3.codec.decode(["uint256", "uint256", "uint256", "uint256", "uint256", "uint256"], raw_res)
                     
-                    if dec[1] == 0: continue
+                    if dec[1] == 0:
+                        # Optimization: position repaid, remove from active discovery
+                        # if it was in our set
+                        if user in self._borrowers:
+                            self._borrowers.remove(user)
+                            from .database import remove_borrower
+                            remove_borrower(self.name, user)
+                        if zombie_queue:
+                            zombie_queue.remove(self.name, user)
+                        continue
                     
                     hf = health_factor_float(dec[5])
                     if hf > zombie_entry: continue
@@ -364,12 +373,13 @@ class MultiProtocolMonitor:
     Unified interface for scanning all protocols at once.
     """
 
-    def __init__(self):
+    def __init__(self, on_liquidatable=None):
         self.monitors: dict = {}
         self.zombie_queue = ZombieQueue(
             entry_hf=cfg("strategy", "zombie_queue", "entry_hf"),
             fire_hf=cfg("strategy",  "zombie_queue", "fire_hf")
         )
+        self.on_liquidatable = on_liquidatable
         self.velocity = VelocityTracker()
         self._init_protocols()
 
@@ -449,13 +459,20 @@ class MultiProtocolMonitor:
                     if not m: return
                     
                     found = m.scan_users(users, zombie_queue=self.zombie_queue)
+
+                    # Log active set reduction if positions were repaid
+                    # scan_users already removes from m._borrowers internally now
+
                     if found:
                         logger.info(f"[{proto_name}] Streaming verification: {len(found)} at-risk positions found!")
-                        # In the main loop, we'll need to handle these. 
-                        # For now, scan_users already updates the zombie_queue.
-                        for p in found:
-                            if p.get("health_factor", 2.0) <= 1.0:
-                                logger.warning(f"[STREAMS] LIQUIDATABLE: {p['user']} HF={p['health_factor']:.4f}")
+
+                        liquidatable = [p for p in found if p.get("health_factor", 2.0) <= 1.0]
+                        for p in liquidatable:
+                            logger.warning(f"[STREAMS] LIQUIDATABLE: {p['user']} HF={p['health_factor']:.4f}")
+
+                        if liquidatable and self.on_liquidatable:
+                            logger.info(f"[STREAMS] Triggering immediate execution for {len(liquidatable)} positions")
+                            self.on_liquidatable(liquidatable)
 
                 monitor.load_borrowers_from_events(from_block, current_block, on_batch_found=_streaming_callback)
 
@@ -475,7 +492,17 @@ class MultiProtocolMonitor:
                 from_block = last_block + 1
             
             if from_block < current_block:
-                monitor.load_borrowers_from_events(from_block, current_block)
+                def _streaming_callback(proto_name, users):
+                    m = self.monitors.get(proto_name)
+                    if not m: return
+                    found = m.scan_users(users, zombie_queue=self.zombie_queue)
+                    if found:
+                        liquidatable = [p for p in found if p.get("health_factor", 2.0) <= 1.0]
+                        if liquidatable and self.on_liquidatable:
+                            logger.info(f"[REFRESH] Triggering immediate execution for {len(liquidatable)} positions")
+                            self.on_liquidatable(liquidatable)
+
+                monitor.load_borrowers_from_events(from_block, current_block, on_batch_found=_streaming_callback)
 
     def scan_all_protocols(self) -> List[dict]:
         """

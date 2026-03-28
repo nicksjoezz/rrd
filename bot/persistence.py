@@ -84,6 +84,14 @@ class BorrowerStore(JsonStore):
                 all_addrs.update(addrs)
             return len(all_addrs)
 
+    def remove_borrower(self, protocol: str, address: str):
+        with self._lock:
+            if protocol in self._data:
+                addr_l = address.lower()
+                if addr_l in self._data[protocol]:
+                    self._data[protocol].remove(addr_l)
+                    self.save()
+
 # ── History ───────────────────────────────────────────────────────────────────
 class HistoryStore(JsonStore):
     def __init__(self):
