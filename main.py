@@ -767,7 +767,7 @@ def main():
     print(f"  Bot:        {bot_status}")
     print(f"{'═'*56}\n")
 
-    socketio.run(app, host=args.host, port=args.port, debug=False, log_output=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host=args.host, port=args.port, debug=False, log_output=False)
 
 
 if __name__ == "__main__":
