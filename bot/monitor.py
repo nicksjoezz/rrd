@@ -474,6 +474,20 @@ class MultiProtocolMonitor:
             self.velocity.record(pos["protocol"], pos["user"], pos["health_factor"])
             upsert_position(pos)
 
+        # Also upsert all watching positions from zombie queue into database
+        # This ensures the UI has the most up-to-date data for all monitored users
+        zombies = self.zombie_queue.get_watching()
+        for z in zombies:
+            upsert_position({
+                "user":              z["user"],
+                "protocol":          z["protocol"],
+                "health_factor":     z.get("health_factor"),
+                "total_debt_usd":    z.get("total_debt_usd"),
+                "total_col_usd":     z.get("total_col_usd"),
+                "collateral_token":  z.get("collateral_token"),
+                "debt_token":        z.get("debt_token"),
+            })
+
         # Also flush any zombie queue items that are now ready
         ready = self.zombie_queue.get_ready()
         for pos in ready:

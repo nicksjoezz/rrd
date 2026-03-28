@@ -322,20 +322,12 @@ def api_profit_history():
     except Exception:
         return jsonify([])
 
-@app.route("/api/positions")
-def api_positions():
+def get_merged_positions():
     # 1. Get positions from database (approaching liquidation)
     positions = get_approaching_positions()
 
     # 2. Get positions from zombie queue (monitored but not yet in DB or with different HF)
-    # We want to merge them to ensure everything in zombies.json is visible
     try:
-        from bot.monitor import MultiProtocolMonitor
-        # Note: In a real app, you might want to share the monitor instance
-        # but here we'll just read from the queue directly if possible
-        # or rely on the fact that scan_all_protocols already calls upsert_position
-
-        # However, to be sure we show everything in the zombie queue:
         from bot.zombie_queue import ZombieQueue
         zq = ZombieQueue(
             entry_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("entry_hf", 1.05)),
@@ -343,12 +335,10 @@ def api_positions():
         )
         zombies = zq.get_watching()
 
-        # Merge logic: if user+protocol already in positions, update it; else append.
         pos_map = {f"{p['protocol']}:{p['address'].lower()}": p for p in positions}
         for z in zombies:
             key = f"{z['protocol']}:{z['user'].lower()}"
             if key not in pos_map:
-                # Convert zombie format to position format
                 pos_map[key] = {
                     "address":          z["user"],
                     "protocol":         z["protocol"],
@@ -363,11 +353,14 @@ def api_positions():
             else:
                 pos_map[key]["is_zombie"] = True
 
-        positions = sorted(pos_map.values(), key=lambda x: x.get("health_factor", 9.9))
+        return sorted(pos_map.values(), key=lambda x: x.get("health_factor", 9.9))
     except Exception as e:
         logger.error(f"Error merging zombie positions: {e}")
+        return positions
 
-    return jsonify(positions)
+@app.route("/api/positions")
+def api_positions():
+    return jsonify(get_merged_positions())
 
 @app.route("/api/logs")
 def api_logs():
@@ -753,7 +746,7 @@ def _push_loop():
                     "cycle":     _bot_stats["cycle"],
                     "last_scan": _bot_stats["last_scan"],
                 })
-                socketio.emit("positions",  get_approaching_positions()[:20])
+                socketio.emit("positions",  get_merged_positions()[:20])
             except Exception:
                 pass
         time.sleep(3)

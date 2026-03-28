@@ -288,6 +288,8 @@ input:checked + .toggle-slider::before { transform: translateX(18px); background
 @media (max-width: 500px) {
   .grid-4 { grid-template-columns: 1fr; }
   .topbar-right .topbar-mode { display: none; }
+  .data-table th, .data-table td { padding: 8px 10px; font-size: 10px; }
+  .stat-value { font-size: 24px; }
 }
 .mt-4{margin-top:4px} .mt-8{margin-top:8px} .mt-16{margin-top:16px} .mt-24{margin-top:24px}
 .mb-16{margin-bottom:16px} .flex{display:flex} .items-center{align-items:center}
@@ -334,6 +336,9 @@ input:checked + .toggle-slider::before { transform: translateX(18px); background
       <div class="nav-section">Analyse</div>
       <a href="/analytics" class="nav-link {% if request.endpoint=='page_analytics' %}active{% endif %}">
         <span class="nav-icon">◭</span> Analytics
+      </a>
+      <a href="/wallet" class="nav-link {% if request.endpoint=='page_wallet' %}active{% endif %}">
+        <span class="nav-icon">👛</span> Wallet
       </a>
       <div class="nav-section">Config</div>
       <a href="/settings" class="nav-link {% if request.endpoint=='page_settings' %}active{% endif %}">
