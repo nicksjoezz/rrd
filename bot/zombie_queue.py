@@ -17,6 +17,14 @@ from typing import Optional
 
 logger = logging.getLogger("liquidation_bot.zombie")
 
+_shared_zq = None
+
+def get_zombie_queue(entry_hf: float = 1.05, fire_hf: float = 1.0) -> 'ZombieQueue':
+    global _shared_zq
+    if _shared_zq is None:
+        _shared_zq = ZombieQueue(entry_hf=entry_hf, fire_hf=fire_hf)
+    return _shared_zq
+
 
 class ZombieQueue:
     """

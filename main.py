@@ -49,6 +49,7 @@ def start_bot_engine():
             return False
         _bot_running.set()
         threading.Thread(target=_bot_loop, daemon=True, name="bot-engine").start()
+        threading.Thread(target=_discovery_loop, daemon=True, name="bot-discovery").start()
         logger.info("Bot engine started -- scanning 24/7")
         return True
 
@@ -60,7 +61,25 @@ def stop_bot_engine():
         logger.info("Bot engine stopping...")
         return True
 
-# -- Bot loop -- runs 24/7, executes immediately when opportunities found --------
+# ── 1. Discovery Loop (Hourly) ────────────────────────────────────────────────
+def _discovery_loop():
+    """Background thread to scan for new borrowers every hour."""
+    from bot.monitor import MultiProtocolMonitor
+    monitor = MultiProtocolMonitor()
+    while _bot_running.is_set():
+        try:
+            logger.info("[DISCOVERY] Starting hourly borrower discovery...")
+            monitor.refresh_borrowers()
+            logger.info("[DISCOVERY] Discovery complete.")
+        except Exception as e:
+            logger.error(f"[DISCOVERY] Error: {e}")
+
+        # Sleep for 1 hour (3600s)
+        for _ in range(3600):
+            if not _bot_running.is_set(): return
+            time.sleep(1)
+
+# ── 2. Real-Time Monitor & Executor Loop ──────────────────────────────────────
 def _bot_loop():
     try:
         from bot.monitor         import MultiProtocolMonitor
@@ -102,8 +121,8 @@ def _bot_loop():
 
         # Load manually added/persistent zombies into monitors
         # We also need to add these to the monitor discovery list
-        from bot.zombie_queue import ZombieQueue
-        zq = ZombieQueue(
+        from bot.zombie_queue import get_zombie_queue
+        zq = get_zombie_queue(
             entry_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("entry_hf", 1.05)),
             fire_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("fire_hf", 1.0))
         )
@@ -306,52 +325,75 @@ def api_stats():
 @app.route("/api/profit-history")
 def api_profit_history():
     try:
-        con  = sqlite3.connect(str(ROOT / "logs" / "bot.db"))
-        rows = con.execute(
-            """SELECT date(timestamp,'unixepoch') as day,
-                      COUNT(*) as count,
-                      COALESCE(SUM(estimated_profit),0) as profit
-               FROM liquidations
-               GROUP BY day ORDER BY day DESC LIMIT 30"""
-        ).fetchall()
-        con.close()
-        return jsonify([
-            {"day": r[0], "count": r[1], "profit": round(float(r[2]), 2)}
-            for r in rows
-        ])
+        from bot.persistence import history
+        data = history.get_all()
+
+        # Group by day
+        by_day = {}
+        for r in data:
+            day = time.strftime('%Y-%m-%d', time.gmtime(r.get('timestamp', 0)))
+            if day not in by_day:
+                by_day[day] = {"day": day, "count": 0, "profit": 0.0}
+            by_day[day]["count"] += 1
+            by_day[day]["profit"] += float(r.get("estimated_profit", 0))
+
+        sorted_days = sorted(by_day.values(), key=lambda x: x['day'], reverse=True)
+        return jsonify(sorted_days[:30])
     except Exception:
         return jsonify([])
 
 def get_merged_positions():
-    # 1. Get positions from database (approaching liquidation)
-    positions = get_approaching_positions()
-
-    # 2. Get positions from zombie queue (monitored but not yet in DB or with different HF)
+    """
+    Unified source of truth: Merges persistent JSON positions with
+    live Zombie Queue data. Syncs 100% backend/frontend alignment.
+    """
     try:
-        from bot.zombie_queue import ZombieQueue
-        zq = ZombieQueue(
+        from bot.persistence import positions as pos_store
+        from bot.zombie_queue import get_zombie_queue
+
+        # 1. Start with persistent JSON positions
+        positions = pos_store.get_all_positions()
+        pos_map = {}
+        for p in positions:
+            addr = p.get('address') or p.get('user')
+            key = f"{p['protocol']}:{addr.lower()}"
+            pos_map[key] = {
+                "address":          addr,
+                "protocol":         p["protocol"],
+                "health_factor":    p.get("health_factor"),
+                "total_debt_usd":   p.get("total_debt_usd"),
+                "total_col_usd":    p.get("total_col_usd"),
+                "collateral_token": p.get("collateral_token"),
+                "debt_token":       p.get("debt_token"),
+                "last_updated":     p.get("last_updated"),
+                "is_zombie":        False
+            }
+
+        # 2. Merge with current Zombie Queue
+        zq = get_zombie_queue(
             entry_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("entry_hf", 1.05)),
             fire_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("fire_hf", 1.0))
         )
         zombies = zq.get_watching()
 
-        pos_map = {f"{p['protocol']}:{p['address'].lower()}": p for p in positions}
         for z in zombies:
             key = f"{z['protocol']}:{z['user'].lower()}"
+            z_data = {
+                "address":          z["user"],
+                "protocol":         z["protocol"],
+                "health_factor":    z.get("health_factor"),
+                "total_debt_usd":   z.get("total_debt_usd"),
+                "total_col_usd":    z.get("total_col_usd"),
+                "collateral_token": z.get("collateral_token"),
+                "debt_token":       z.get("debt_token"),
+                "last_updated":     z.get("queued_at"),
+                "is_zombie":        True
+            }
             if key not in pos_map:
-                pos_map[key] = {
-                    "address":          z["user"],
-                    "protocol":         z["protocol"],
-                    "health_factor":    z.get("health_factor"),
-                    "total_debt_usd":   z.get("total_debt_usd"),
-                    "total_col_usd":    z.get("total_col_usd"),
-                    "collateral_token": z.get("collateral_token"),
-                    "debt_token":       z.get("debt_token"),
-                    "last_updated":     z.get("queued_at"),
-                    "is_zombie":        True
-                }
+                pos_map[key] = z_data
             else:
-                pos_map[key]["is_zombie"] = True
+                # Zombie data overrides persistent data for real-time accuracy
+                pos_map[key].update(z_data)
 
         return sorted(pos_map.values(), key=lambda x: x.get("health_factor", 9.9))
     except Exception as e:
@@ -691,43 +733,46 @@ def api_health_check():
 def api_analytics():
     """Full analytics breakdown by protocol, collateral, and time period."""
     try:
+        from bot.persistence import history
         days = int(request.args.get("days", 30))
         since = int(time.time()) - (days * 86400)
-        con   = sqlite3.connect(str(ROOT / "logs" / "bot.db"))
-        con.row_factory = sqlite3.Row
+        data = history.get_all()
 
-        # All-time stats
-        all_total  = con.execute("SELECT COUNT(*), COALESCE(SUM(estimated_profit),0) FROM liquidations").fetchone()
-        # Period stats
-        period     = con.execute(
-            "SELECT COUNT(*), COALESCE(SUM(estimated_profit),0) FROM liquidations WHERE timestamp > ?",
-            (since,)
-        ).fetchone()
-        # By protocol
-        by_proto   = con.execute(
-            """SELECT protocol, COUNT(*) as count, COALESCE(SUM(estimated_profit),0) as profit
-               FROM liquidations WHERE timestamp > ? GROUP BY protocol""", (since,)
-        ).fetchall()
-        # By collateral
-        by_col     = con.execute(
-            """SELECT collateral_token, COUNT(*) as count, COALESCE(SUM(estimated_profit),0) as profit
-               FROM liquidations WHERE timestamp > ? GROUP BY collateral_token ORDER BY profit DESC""",
-            (since,)
-        ).fetchall()
-        # Daily
-        daily      = con.execute(
-            """SELECT date(timestamp,'unixepoch') as day, COUNT(*), COALESCE(SUM(estimated_profit),0)
-               FROM liquidations WHERE timestamp > ? GROUP BY day ORDER BY day""", (since,)
-        ).fetchall()
-        con.close()
+        # Filtered and derived stats
+        all_count = len(data)
+        all_profit = sum(float(r.get("estimated_profit", 0)) for r in data)
+
+        period_data = [r for r in data if r.get("timestamp", 0) > since]
+        period_count = len(period_data)
+        period_profit = sum(float(r.get("estimated_profit", 0)) for r in period_data)
+
+        by_proto = {}
+        by_col = {}
+        daily = {}
+
+        for r in period_data:
+            p = r.get("protocol", "Unknown")
+            by_proto[p] = by_proto.get(p, {"count": 0, "profit": 0.0})
+            by_proto[p]["count"] += 1
+            by_proto[p]["profit"] += float(r.get("estimated_profit", 0))
+
+            c = r.get("collateral_token", "Unknown")
+            by_col[c] = by_col.get(c, {"count": 0, "profit": 0.0})
+            by_col[c]["count"] += 1
+            by_col[c]["profit"] += float(r.get("estimated_profit", 0))
+
+            day = time.strftime('%Y-%m-%d', time.gmtime(r.get('timestamp', 0)))
+            daily[day] = daily.get(day, {"count": 0, "profit": 0.0})
+            daily[day]["count"] += 1
+            daily[day]["profit"] += float(r.get("estimated_profit", 0))
 
         return jsonify({
             "days":        days,
-            "all_time":    {"count": all_total[0], "profit": round(float(all_total[1]),2)},
-            "period":      {"count": period[0],    "profit": round(float(period[1]),2)},
-            "by_protocol": [{"protocol": r[0], "count": r[1], "profit": round(float(r[2]),2)} for r in by_proto],
-            "by_collateral":[{"token": r[0], "count": r[1], "profit": round(float(r[2]),2)} for r in by_col],
-            "daily":       [{"day": r[0], "count": r[1], "profit": round(float(r[2]),2)} for r in daily],
+            "all_time":    {"count": all_count, "profit": round(all_profit, 2)},
+            "period":      {"count": period_count, "profit": round(period_profit, 2)},
+            "by_protocol": [{"protocol": k, "count": v["count"], "profit": round(v["profit"], 2)} for k, v in by_proto.items()],
+            "by_collateral":[{"token": k, "count": v["count"], "profit": round(v["profit"], 2)} for k, v in by_col.items()],
+            "daily":       [{"day": k, "count": v["count"], "profit": round(v["profit"], 2)} for k, v in sorted(daily.items())],
         })
     except Exception as e:
         return jsonify({"error": str(e)})

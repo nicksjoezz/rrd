@@ -27,8 +27,6 @@ from .utils import (
     MULTICALL3_ADDR, MULTICALL3_ABI
 )
 from .swap_router import get_best_swap
-import urllib.request as _urllib
-
 
 
 from .zombie_queue import ZombieQueue
@@ -64,6 +62,9 @@ class ProtocolMonitor:
             address=checksum(data_provider_addr),
             abi=DATA_PROVIDER_ABI
         ) if data_provider_addr else None
+
+        self.reserve_configs = {}
+        self._refresh_reserve_configs()
 
     def load_borrowers_from_db(self):
         """Load previously scanned borrowers from SQLite (fast restart)."""
@@ -138,49 +139,136 @@ class ProtocolMonitor:
         if added:
             logger.info(f"[{self.name}] +{added} new borrowers (total: {len(self._borrowers):,})")
 
+    def _refresh_reserve_configs(self):
+        """Fetch and cache decimals and liquidation thresholds for all supported tokens."""
+        if not self.data_provider: return
+        tokens = cfg("tokens")
+        for sym, info in tokens.items():
+            addr = checksum(info["address"])
+            try:
+                # Aave V3 ReserveConfigurationData: [0] decimals, [1] ltv, [2] threshold, [3] bonus...
+                res = self.data_provider.functions.getReserveConfigurationData(addr).call()
+                self.reserve_configs[addr.lower()] = {
+                    "decimals": res[0],
+                    "ltv": res[1] / 10000,
+                    "threshold": res[2] / 10000,
+                    "bonus": (res[3] - 10000) / 10000 if res[3] > 10000 else 0,
+                }
+            except Exception as e:
+                logger.debug(f"[{self.name}] Reserve config fail for {sym}: {e}")
+
+    def _get_best_tokens_and_fresh_hf(self, user: str):
+        """
+        Calculates HF using fresh local prices and returns the best
+        collateral/debt tokens for liquidation.
+        """
+        if not self.data_provider: return None
+        from .profitability import get_token_price_usd
+
+        best_col_score = 0
+        best_col = None
+        best_debt_score = 0
+        best_debt = None
+        total_fresh_weighted_col = 0
+        total_fresh_debt = 0
+
+        tokens = cfg("tokens")
+        for sym, info in tokens.items():
+            addr = info["address"]
+            addr_l = addr.lower()
+            try:
+                rd = self.data_provider.functions.getUserReserveData(
+                    checksum(addr), checksum(user)
+                ).call()
+
+                col_bal = rd[0] # currentATokenBalance
+                debt_bal = rd[2] # currentVariableDebt
+                if col_bal == 0 and debt_bal == 0: continue
+
+                price = get_token_price_usd(addr)
+                if price == 0: price = 1.0 # fallback
+
+                config = self.reserve_configs.get(addr_l, {
+                    "decimals": info["decimals"], "threshold": 0.8, "bonus": info["liquidation_bonus"]
+                })
+                decimals = config["decimals"]
+
+                if col_bal > 0:
+                    usd_val = (col_bal / 10**decimals) * price
+                    total_fresh_weighted_col += usd_val * config["threshold"]
+                    score = usd_val * (1 + config["bonus"]) if cfg("strategy", "prioritize_high_bonus") else usd_val
+                    if score > best_col_score:
+                        best_col_score = score
+                        best_col = (addr, sym, config["bonus"])
+
+                if debt_bal > 0:
+                    usd_val = (debt_bal / 10**decimals) * price
+                    total_fresh_debt += usd_val
+                    if usd_val > best_debt_score:
+                        best_debt_score = usd_val
+                        best_debt = (addr, sym, debt_bal)
+            except Exception: continue
+
+        if not best_col or not best_debt or total_fresh_debt == 0:
+            return None
+
+        fresh_hf = total_fresh_weighted_col / total_fresh_debt
+        return {
+            "fresh_hf": fresh_hf,
+            "col_token": best_col[0], "col_symbol": best_col[1], "col_bonus": best_col[2],
+            "debt_token": best_debt[0], "debt_symbol": best_debt[1], "debt_raw": best_debt[2]
+        }
+
     def check_position(self, user: str, account_data: Optional[tuple] = None) -> Optional[dict]:
         """
         Check a single user's health factor. Returns position dict if liquidatable
         or approaching liquidation. Returns None if healthy.
-        If account_data is provided (from multicall), it bils around it.
+
+        Now uses real-time local price data to detect health factor drops BEFORE
+        the protocol's on-chain oracle updates.
         """
-        w3 = get_web3()
         try:
             if account_data:
                 data = account_data
             else:
-                data = self.pool.functions.getUserAccountData(
-                    checksum(user)
-                ).call()
+                data = self.pool.functions.getUserAccountData(checksum(user)).call()
 
-            total_col  = data[0]
-            total_debt = data[1]
-            hf_raw     = data[5]
+            total_col_base  = data[0]
+            total_debt_base = data[1]
+            hf_raw          = data[5]
 
-            if total_debt == 0:
-                return None
+            if total_debt_base == 0: return None
 
-            hf         = health_factor_float(hf_raw)
-            col_usd    = wei_to_usd_base(total_col)
-            debt_usd   = wei_to_usd_base(total_debt)
+            # ── Real-Time Edge ──────────────────────────────────────────
+            # Re-calculate HF using local price data
+            hf = health_factor_float(hf_raw)
+            zombie_entry = cfg("strategy", "zombie_queue", "entry_hf")
+            best_info = None
 
+            # Optimization: Only deep-dive if the position is within striking distance
+            if hf < 1.3:
+                best_info = self._get_best_tokens_and_fresh_hf(user)
+                if best_info: hf = best_info["fresh_hf"]
+
+            col_usd    = wei_to_usd_base(total_col_base)
+            debt_usd   = wei_to_usd_base(total_debt_base)
             min_debt = cfg("strategy", "min_debt_usd")
             max_debt = cfg("strategy", "max_debt_usd")
 
-            if debt_usd < min_debt or debt_usd > max_debt:
-                return None
+            if debt_usd < min_debt or debt_usd > max_debt: return None
+            if hf > zombie_entry: return None
 
-            # Only care about positions near or below threshold
-            zombie_entry = cfg("strategy", "zombie_queue", "entry_hf")
-            if hf > zombie_entry:
-                return None
+            # Ensure we have best_info if we're proceeding
+            if not best_info:
+                best_info = self._get_best_tokens_and_fresh_hf(user)
+            if not best_info: return None
 
-            # Find best collateral and debt token
-            tokens       = self._get_best_tokens(user)
-            if not tokens:
-                return None
-
-            col_token, col_symbol, col_bonus, debt_token, debt_symbol, debt_raw = tokens
+            col_token    = best_info["col_token"]
+            col_symbol   = best_info["col_symbol"]
+            col_bonus    = best_info["col_bonus"]
+            debt_token   = best_info["debt_token"]
+            debt_symbol  = best_info["debt_symbol"]
+            debt_raw     = best_info["debt_raw"]
 
             # Close factor: 100% if HF < 0.95 OR position < $2k, else 50%
             close_factor = cfg("strategy", "close_factor")
@@ -188,8 +276,6 @@ class ProtocolMonitor:
                 close_factor = 1.0
 
             debt_to_cover = int(debt_raw * close_factor)
-
-            # Pre-calculate best swap route for immediate fire
             _, _, swap_params = get_best_swap(col_token, debt_token, debt_to_cover)
 
             return {
@@ -207,73 +293,9 @@ class ProtocolMonitor:
                 "pool_address":      self.pool_addr,
                 "swap_params":       swap_params,
             }
-
         except Exception as e:
             logger.debug(f"[{self.name}] check_position error for {user[:8]}: {e}")
             return None
-
-    def _get_best_tokens(self, user: str):
-        """
-        Find the best collateral (highest USD value or highest bonus) and
-        highest debt token to use in the liquidation call.
-        Returns (col_addr, col_sym, col_bonus, debt_addr, debt_sym, debt_raw_wei) or None.
-        """
-        if not self.data_provider:
-            return None
-
-        token_map = get_token_map()
-        best_col_value = 0
-        best_col_bonus = 0
-        best_col  = None
-        best_debt_value = 0
-        best_debt = None
-        best_debt_raw = 0
-
-        tokens = cfg("tokens")
-
-        for sym, info in tokens.items():
-            addr = info["address"]
-            if not self.data_provider:
-                return None
-
-            try:
-                rd = self.data_provider.functions.getUserReserveData(
-                    checksum(addr), checksum(user)
-                ).call()
-
-                a_token_bal   = rd[0]  # collateral
-                variable_debt = rd[2]  # debt
-                decimals      = info["decimals"]
-                bonus         = info["liquidation_bonus"]
-
-                # Score collateral: prefer high-bonus assets when enabled
-                if a_token_bal > 0:
-                    col_usd = a_token_bal / (10 ** decimals)  # rough score
-                    score   = col_usd * (1 + bonus) if cfg("strategy", "prioritize_high_bonus") else col_usd
-                    if score > best_col_bonus:
-                        best_col_bonus = score
-                        best_col_value = col_usd
-                        best_col = (addr, sym, bonus)
-
-                # Track highest debt
-                if variable_debt > 0:
-                    debt_score = variable_debt / (10 ** decimals)
-                    if debt_score > best_debt_value:
-                        best_debt_value = debt_score
-                        best_debt = (addr, sym)
-                        best_debt_raw = variable_debt
-
-            except Exception:
-                continue
-
-        if not best_col or not best_debt:
-            return None
-
-        return (
-            best_col[0], best_col[1], best_col[2],
-            best_debt[0], best_debt[1],
-            best_debt_raw
-        )
 
     def scan_all(self, zombie_queue: Optional[ZombieQueue] = None) -> List[dict]:
         """Scan all known borrowers."""
@@ -439,8 +461,10 @@ class MultiProtocolMonitor:
 
     def refresh_borrowers(self):
         """Incremental update -- scan only new blocks found since last refresh."""
-        w3 = get_web3()
-        current_block = w3.eth.block_number
+        try:
+            w3 = get_web3()
+            current_block = w3.eth.block_number
+        except Exception: return
 
         for name, monitor in self.monitors.items():
             last_block = get_last_scan_block(name)
@@ -469,24 +493,40 @@ class MultiProtocolMonitor:
             except Exception as e:
                 logger.error(f"[{name}] Scan error: {e}")
 
-        # Record velocity for all scanned positions (including non-liquidatable)
-        for pos in all_positions:
-            self.velocity.record(pos["protocol"], pos["user"], pos["health_factor"])
-            upsert_position(pos)
-
-        # Also upsert all watching positions from zombie queue into database
-        # This ensures the UI has the most up-to-date data for all monitored users
+        # Record velocity and upsert all positions
+        # Including non-liquidatable but "watching" positions
+        all_monitored = {f"{p['protocol']}:{p['user'].lower()}": p for p in all_positions}
         zombies = self.zombie_queue.get_watching()
         for z in zombies:
-            upsert_position({
-                "user":              z["user"],
-                "protocol":          z["protocol"],
-                "health_factor":     z.get("health_factor"),
-                "total_debt_usd":    z.get("total_debt_usd"),
-                "total_col_usd":     z.get("total_col_usd"),
-                "collateral_token":  z.get("collateral_token"),
-                "debt_token":        z.get("debt_token"),
-            })
+            key = f"{z['protocol']}:{z['user'].lower()}"
+            if key not in all_monitored:
+                all_monitored[key] = {
+                    "user":              z["user"],
+                    "protocol":          z["protocol"],
+                    "health_factor":     z.get("health_factor"),
+                    "total_debt_usd":    z.get("total_debt_usd"),
+                    "total_col_usd":     z.get("total_col_usd"),
+                    "collateral_token":  z.get("collateral_token"),
+                    "debt_token":        z.get("debt_token"),
+                }
+
+        # Clear out old positions that have zero debt or are healthy and not in zombies
+        # This keeps the tracking list lean.
+        from .persistence import positions as pos_store
+        current_store = pos_store.get_all_positions()
+        to_delete = []
+        for p in current_store:
+            key = f"{p['protocol']}:{p['address'].lower() if 'address' in p else p['user'].lower()}"
+            if key not in all_monitored:
+                to_delete.append((p['protocol'], p['address'] if 'address' in p else p['user']))
+
+        for proto, user in to_delete:
+            pos_store.remove_position(proto, user)
+
+        # Update remaining
+        for pos in all_monitored.values():
+            self.velocity.record(pos["protocol"], pos["user"], pos["health_factor"])
+            upsert_position(pos)
 
         # Also flush any zombie queue items that are now ready
         ready = self.zombie_queue.get_ready()

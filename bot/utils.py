@@ -172,6 +172,20 @@ DATA_PROVIDER_ABI = json.loads('''[
      {"name":"liquidityRate","type":"uint256"},
      {"name":"stableRateLastUpdated","type":"uint40"},
      {"name":"usageAsCollateralEnabled","type":"bool"}
+   ]},
+  {"name":"getReserveConfigurationData","type":"function","stateMutability":"view",
+   "inputs":[{"name":"asset","type":"address"}],
+   "outputs":[
+     {"name":"decimals","type":"uint256"},
+     {"name":"ltv","type":"uint256"},
+     {"name":"liquidationThreshold","type":"uint256"},
+     {"name":"liquidationBonus","type":"uint256"},
+     {"name":"reserveFactor","type":"uint256"},
+     {"name":"usageAsCollateralEnabled","type":"bool"},
+     {"name":"borrowingEnabled","type":"bool"},
+     {"name":"stableBorrowRateEnabled","type":"bool"},
+     {"name":"isActive","type":"bool"},
+     {"name":"isFrozen","type":"bool"}
    ]}
 ]''')
 

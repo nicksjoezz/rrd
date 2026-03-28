@@ -138,9 +138,10 @@ function onPositions(positions) {
 
 function renderPositions() {
   const filtered = allPositions.filter(p => {
-    if (activeFilter === 'crit')   return p.health_factor < 1.0;
-    if (activeFilter === 'warn')   return p.health_factor >= 1.0 && p.health_factor < 1.05;
-    if (activeFilter === 'watch')  return p.health_factor >= 1.05;
+    const hf = parseFloat(p.health_factor) || 9.9;
+    if (activeFilter === 'crit')   return hf < 1.0;
+    if (activeFilter === 'warn')   return hf >= 1.0 && hf < 1.05;
+    if (activeFilter === 'watch')  return hf >= 1.05;
     if (activeFilter === 'zombie') return p.is_zombie === true;
     return true;
   });
