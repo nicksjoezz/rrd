@@ -54,7 +54,7 @@ def _get_coingecko_eth_price() -> float:
         return price
     except Exception: return _cg_eth_cache
 
-def get_token_price_usd(token_address: str) -> float:
+def get_token_price_usd(token_address: str, force_fresh: bool = False) -> float:
     """
     Get token price in USD using Chainlink feeds.
     Falls back to on-chain Aave oracle pricing via base unit conversion.
@@ -66,12 +66,12 @@ def get_token_price_usd(token_address: str) -> float:
 
     # Throttled price cache: 10s TTL for individual token prices
     global _price_cache, _price_cache_time
-    if addr in _price_cache and (now - _price_cache_time.get(addr, 0) < 10):
+    if not force_fresh and addr in _price_cache and (now - _price_cache_time.get(addr, 0) < 10):
         return _price_cache[addr]
 
     # Throttle eth_blockNumber call (expensive RPC)
     global _cached_eth_block, _last_eth_block_fetch
-    if now - _last_eth_block_fetch > 10:
+    if force_fresh or (now - _last_eth_block_fetch > 10):
         try:
             _cached_eth_block = w3.eth.block_number
             _last_eth_block_fetch = now
@@ -93,7 +93,8 @@ def get_token_price_usd(token_address: str) -> float:
                 )
                 data  = feed.functions.latestRoundData().call()
                 price = data[1] / 1e8  # Chainlink uses 8 decimals
-                logger.debug(f"[PRICE] Chainlink: {sym} = ${price:,.2f}")
+                if _price_cache.get(addr) != price:
+                    logger.debug(f"[PRICE] Chainlink: {sym} = ${price:,.2f}")
                 _price_cache[addr] = price
                 _price_cache_time[addr] = now
                 return price
@@ -110,7 +111,8 @@ def get_token_price_usd(token_address: str) -> float:
             price = oracle.functions.getAssetPrice(checksum(token_address)).call() / 1e8
             if price > 0:
                 sym = get_token_map().get(addr, {}).get("symbol", addr[:10])
-                logger.debug(f"[PRICE] Aave Oracle: {sym} = ${price:,.2f}")
+                if _price_cache.get(addr) != price:
+                    logger.debug(f"[PRICE] Aave Oracle: {sym} = ${price:,.2f}")
                 _price_cache[addr] = price
                 _price_cache_time[addr] = now
                 return price
@@ -120,7 +122,8 @@ def get_token_price_usd(token_address: str) -> float:
     if addr == cfg("network", "weth").lower():
         price = _get_coingecko_eth_price()
         if price > 0:
-            logger.debug(f"[PRICE] CoinGecko: ETH = ${price:,.2f}")
+            if _price_cache.get(addr) != price:
+                logger.debug(f"[PRICE] CoinGecko: ETH = ${price:,.2f}")
             _price_cache[addr] = price
             _price_cache_time[addr] = now
             return price
@@ -128,7 +131,7 @@ def get_token_price_usd(token_address: str) -> float:
     return 0.0  # Unknown — will be excluded from profitability check
 
 
-def estimate_profit_usd(position: dict) -> dict:
+def estimate_profit_usd(position: dict, force_fresh: bool = False) -> dict:
     """
     Estimate net profit for a liquidation. Returns:
     {
@@ -158,8 +161,8 @@ def estimate_profit_usd(position: dict) -> dict:
     debt_amount     = debt_amount_raw / (10 ** debt_decimals)
 
     # USD values
-    debt_price  = get_token_price_usd(debt_addr)
-    col_price   = get_token_price_usd(col_addr)
+    debt_price  = get_token_price_usd(debt_addr, force_fresh=force_fresh)
+    col_price   = get_token_price_usd(col_addr, force_fresh=force_fresh)
 
     if debt_price <= 0 or col_price <= 0:
         return {"profitable": False, "reason": "Missing live price data"}
@@ -181,7 +184,7 @@ def estimate_profit_usd(position: dict) -> dict:
     # Gas estimate (Arbitrum L2 + approximate L1 calldata fee)
     gas_limit       = cfg("gas", "gas_limit")
     max_fee_gwei    = cfg("gas", "max_fee_per_gas_gwei")
-    eth_price       = get_token_price_usd(cfg("network", "weth"))
+    eth_price       = get_token_price_usd(cfg("network", "weth"), force_fresh=force_fresh)
     if eth_price <= 0:
         return {"profitable": False, "reason": "ETH price unavailable for gas estimation"}
 

@@ -65,7 +65,27 @@ class ProtocolMonitor:
         ) if data_provider_addr else None
 
         self.reserve_configs = {}
-        self._refresh_reserve_configs()
+
+    def _get_reserve_config(self, token_addr: str):
+        addr_l = token_addr.lower()
+        if addr_l in self.reserve_configs:
+            return self.reserve_configs[addr_l]
+
+        if not self.data_provider: return None
+
+        try:
+            res = self.data_provider.functions.getReserveConfigurationData(checksum(token_addr)).call()
+            config = {
+                "decimals": res[0],
+                "ltv": res[1] / 10000,
+                "threshold": res[2] / 10000,
+                "bonus": (res[3] - 10000) / 10000 if res[3] > 10000 else 0,
+            }
+            self.reserve_configs[addr_l] = config
+            return config
+        except Exception as e:
+            logger.debug(f"[{self.name}] Reserve config fail for {token_addr[:10]}: {e}")
+            return None
 
     def load_borrowers_from_db(self):
         """Load previously scanned borrowers from SQLite (fast restart)."""
@@ -135,24 +155,6 @@ class ProtocolMonitor:
         if added:
             logger.info(f"[{self.name}] +{added} new borrowers (total: {len(self._borrowers):,})")
 
-    def _refresh_reserve_configs(self):
-        """Fetch and cache decimals and liquidation thresholds for all supported tokens."""
-        if not self.data_provider: return
-        tokens = cfg("tokens")
-        for sym, info in tokens.items():
-            addr = checksum(info["address"])
-            try:
-                # Aave V3 ReserveConfigurationData: [0] decimals, [1] ltv, [2] threshold, [3] bonus...
-                res = self.data_provider.functions.getReserveConfigurationData(addr).call()
-                self.reserve_configs[addr.lower()] = {
-                    "decimals": res[0],
-                    "ltv": res[1] / 10000,
-                    "threshold": res[2] / 10000,
-                    "bonus": (res[3] - 10000) / 10000 if res[3] > 10000 else 0,
-                }
-            except Exception as e:
-                logger.debug(f"[{self.name}] Reserve config fail for {sym}: {e}")
-
     def _get_best_tokens_and_fresh_hf(self, user: str):
         """
         Calculates HF using fresh local prices and returns the best
@@ -168,10 +170,34 @@ class ProtocolMonitor:
         total_fresh_weighted_col = 0
         total_fresh_debt = 0
 
+        # 1. Get user configuration to see which assets they actually have
+        try:
+            # Aave V3: getUserConfiguration returns a bitmask of assets
+            # Each pair of bits represents [isCollateral, isBorrowing]
+            config_bits = self.pool.functions.getUserConfiguration(checksum(user)).call()
+            if config_bits == 0: return None
+        except Exception:
+            config_bits = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF # Fallback to scan all if bitmask fails
+
+        # We need to know which index corresponds to which asset
+        # Aave V3 Pool: getReservesList() returns list of addresses in order
+        try:
+            reserves_list = self.pool.functions.getReservesList().call()
+        except Exception:
+            reserves_list = []
+
         tokens = cfg("tokens")
         for sym, info in tokens.items():
             addr = info["address"]
             addr_l = addr.lower()
+
+            # Check bitmask if possible
+            if reserves_list and addr_l in [a.lower() for a in reserves_list]:
+                idx = [a.lower() for a in reserves_list].index(addr_l)
+                # Bits are stored as: index 0 is bits 0-1, index 1 is bits 2-3, etc.
+                is_using = (config_bits >> (idx * 2)) & 3
+                if not is_using: continue
+
             try:
                 rd = self.data_provider.functions.getUserReserveData(
                     checksum(addr), checksum(user)
@@ -183,9 +209,9 @@ class ProtocolMonitor:
 
                 price = get_token_price_usd(addr)
 
-                config = self.reserve_configs.get(addr_l, {
-                    "decimals": info["decimals"], "threshold": 0.8, "bonus": info["liquidation_bonus"]
-                })
+                config = self._get_reserve_config(addr)
+                if not config:
+                    config = {"decimals": info["decimals"], "threshold": 0.8, "bonus": info["liquidation_bonus"]}
                 decimals = config["decimals"]
 
                 if col_bal > 0:

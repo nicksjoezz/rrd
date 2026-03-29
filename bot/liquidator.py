@@ -351,7 +351,8 @@ class LiquidationExecutor:
             logger.warning(f"[{protocol}] Pre-execution verification failed for {user[:8]}: {e}")
 
         # Profitability check (runs in both modes)
-        profit_info = estimate_profit_usd(position)
+        # Use force_fresh=True for final pre-execution check to ensure "at the moment" accuracy
+        profit_info = estimate_profit_usd(position, force_fresh=True)
         if not profit_info["profitable"]:
             logger.info(
                 f"[{protocol}] Skip {user[:8]}... -- "

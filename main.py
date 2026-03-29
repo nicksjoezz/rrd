@@ -167,8 +167,8 @@ def _bot_loop():
                     f"Mode: {(load_config() or {}).get('mode','live').upper()}"
                 )
 
-                # Check oracle price feeds for large moves
-                oracle.check_all_feeds()
+                # Proactive oracle polling removed as requested to save resources.
+                # Prices are now fetched on-demand during scan/execution.
 
                 # Priority re-check wallets with recent on-chain activity
                 hot = streamer.get_and_clear_hotlist()

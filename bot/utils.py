@@ -145,6 +145,12 @@ AAVE_POOL_ABI = json.loads('''[
      {"name":"ltv","type":"uint256"},
      {"name":"healthFactor","type":"uint256"}
    ]},
+  {"name":"getUserConfiguration","type":"function","stateMutability":"view",
+   "inputs":[{"name":"user","type":"address"}],
+   "outputs":[{"name":"","type":"uint256"}]},
+  {"name":"getReservesList","type":"function","stateMutability":"view",
+   "inputs":[],
+   "outputs":[{"name":"","type":"address[]"}]},
   {"name":"Borrow","type":"event","inputs":[
      {"name":"reserve","type":"address","indexed":true},
      {"name":"user","type":"address","indexed":false},
