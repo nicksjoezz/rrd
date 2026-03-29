@@ -13,7 +13,7 @@ For a terminal opportunity snapshot:
     python scan_test.py
 """
 
-import os, sys, time, json, sqlite3, logging, argparse, threading
+import os, sys, time, json, logging, argparse, threading
 from pathlib import Path
 
 from flask import Flask, render_template, jsonify, request
