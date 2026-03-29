@@ -31,7 +31,8 @@ from .swap_router import get_best_swap
 
 from .database import (
     upsert_borrowers, get_borrowers, upsert_position,
-    get_last_scan_block, set_last_scan_block, remove_position
+    get_last_scan_block, set_last_scan_block, remove_position,
+    remove_borrower
 )
 from .velocity import VelocityTracker
 from .zombie_queue import ZombieQueue
@@ -330,7 +331,6 @@ class ProtocolMonitor:
                     if dec[1] == 0:
                         if user in self._borrowers:
                             self._borrowers.remove(user)
-                            from .database import remove_borrower
                             remove_borrower(self.name, user)
                         if zombie_queue:
                             zombie_queue.remove(self.name, user)

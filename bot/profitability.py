@@ -18,7 +18,7 @@ logger = logging.getLogger("liquidation_bot.profit")
 
 # Cache prices to avoid hammering RPC
 _price_cache: dict = {}
-_price_cache_block: int = 0
+_price_cache_time: dict = {}
 _last_eth_block_fetch: float = 0
 _cached_eth_block: int = 0
 _aave_oracle_addr: Optional[str] = None
@@ -62,22 +62,20 @@ def get_token_price_usd(token_address: str) -> float:
     """
     w3   = get_web3()
     addr = token_address.lower()
+    now  = time.time()
 
-    # Throttle eth_blockNumber to avoid spamming RPC
+    # Throttled price cache: 10s TTL for individual token prices
+    global _price_cache, _price_cache_time
+    if addr in _price_cache and (now - _price_cache_time.get(addr, 0) < 10):
+        return _price_cache[addr]
+
+    # Throttle eth_blockNumber call (expensive RPC)
     global _cached_eth_block, _last_eth_block_fetch
-    now = time.time()
-    if now - _last_eth_block_fetch > 2: # 2s TTL for block number cache
+    if now - _last_eth_block_fetch > 10:
         try:
             _cached_eth_block = w3.eth.block_number
             _last_eth_block_fetch = now
-        except Exception:
-            pass
-
-    # Use cached prices if same block
-    current_block = _cached_eth_block
-    global _price_cache, _price_cache_block
-    if current_block == _price_cache_block and addr in _price_cache:
-        return _price_cache[addr]
+        except Exception: pass
 
     # Chainlink feed lookup
     chainlink_feeds = cfg("oracle", "chainlink_feeds")
@@ -95,9 +93,9 @@ def get_token_price_usd(token_address: str) -> float:
                 )
                 data  = feed.functions.latestRoundData().call()
                 price = data[1] / 1e8  # Chainlink uses 8 decimals
-                logger.info(f"[PRICE] Chainlink: {sym} = ${price:,.2f}")
+                logger.debug(f"[PRICE] Chainlink: {sym} = ${price:,.2f}")
                 _price_cache[addr] = price
-                _price_cache_block = current_block
+                _price_cache_time[addr] = now
                 return price
             except Exception as e:
                 logger.debug(f"Chainlink price fetch failed for {sym}: {e}")
@@ -112,9 +110,9 @@ def get_token_price_usd(token_address: str) -> float:
             price = oracle.functions.getAssetPrice(checksum(token_address)).call() / 1e8
             if price > 0:
                 sym = get_token_map().get(addr, {}).get("symbol", addr[:10])
-                logger.info(f"[PRICE] Aave Oracle: {sym} = ${price:,.2f}")
+                logger.debug(f"[PRICE] Aave Oracle: {sym} = ${price:,.2f}")
                 _price_cache[addr] = price
-                _price_cache_block = current_block
+                _price_cache_time[addr] = now
                 return price
         except Exception: pass
 
@@ -122,9 +120,9 @@ def get_token_price_usd(token_address: str) -> float:
     if addr == cfg("network", "weth").lower():
         price = _get_coingecko_eth_price()
         if price > 0:
-            logger.info(f"[PRICE] CoinGecko: ETH = ${price:,.2f}")
+            logger.debug(f"[PRICE] CoinGecko: ETH = ${price:,.2f}")
             _price_cache[addr] = price
-            _price_cache_block = current_block
+            _price_cache_time[addr] = now
             return price
 
     return 0.0  # Unknown — will be excluded from profitability check

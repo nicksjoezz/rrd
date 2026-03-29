@@ -448,6 +448,10 @@ function applyMode(mode){
   const tp = document.getElementById('topbar-mode');
   tp.className = 'topbar-mode ' + (isSim ? 'sim' : 'live');
   document.getElementById('topbar-mode-text').textContent = isSim ? 'SIMULATE' : 'LIVE';
+
+  /* sidebar mode badge (small text at bottom) */
+  const sb = document.getElementById('sidebar-mode-badge');
+  if(sb) sb.textContent = (isSim ? '⬡ SIMULATE' : '⚡ LIVE');
 }
 
 async function toggleMode(){

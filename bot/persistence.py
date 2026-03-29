@@ -45,13 +45,8 @@ class JsonStore:
         tmp_path = self.path.with_suffix(".tmp")
         try:
             with self._lock:
-                def bytes_to_hex(obj):
-                    if isinstance(obj, bytes):
-                        return obj.hex()
-                    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
-
                 with open(tmp_path, "w") as f:
-                    json.dump(self._data, f, indent=2, default=bytes_to_hex)
+                    json.dump(self._data, f, indent=2)
                 if self.path.exists():
                     os.remove(self.path)
                 os.rename(tmp_path, self.path)
