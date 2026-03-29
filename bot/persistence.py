@@ -1,11 +1,13 @@
 """
 persistence.py — JSON-based persistence layer for LiqBot.
 
-Replaces SQLite (bot.db) with simpler, cache-friendly JSON files:
-  - borrowers.json : All known wallet addresses per protocol.
-  - history.json   : Full liquidation history with profit data.
-  - state.json     : Last scanned block per protocol.
-  - positions.json : Current tracking list with HFs and debt.
+Categorized position storage:
+  - critical.json : Positions with HF < 1.0 (Liquidatable).
+  - zombies.json  : Positions with HF 1.0 - 1.05 (Danger).
+  - watching.json : Positions with HF 1.05 - 1.15 (Watching).
+  - borrowers.json: All known wallet addresses per protocol.
+  - history.json  : Full liquidation history with profit data.
+  - state.json    : Last scanned block per protocol.
 
 All files are stored in the logs/ directory.
 """
@@ -24,16 +26,17 @@ LOG_DIR.mkdir(exist_ok=True)
 class JsonStore:
     def __init__(self, filename: str):
         self.path = LOG_DIR / filename
-        self._data: Any = self._load_initial()
         self._lock = threading.RLock()
+        self._data: Any = self._load_initial()
 
     def _load_initial(self) -> Any:
         if not self.path.exists():
-            return {} if ".json" in self.path.name else []
+            return {}
         try:
             with self._lock:
                 with open(self.path, "r") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    return data if data is not None else {}
         except Exception:
             return {}
 
@@ -58,10 +61,6 @@ class JsonStore:
 
 # ── Borrowers ─────────────────────────────────────────────────────────────────
 class BorrowerStore(JsonStore):
-    def __init__(self):
-        super().__init__("borrowers.json")
-        if not isinstance(self._data, dict): self._data = {}
-
     def add_borrowers(self, protocol: str, addresses: List[str]):
         with self._lock:
             if protocol not in self._data:
@@ -86,27 +85,35 @@ class BorrowerStore(JsonStore):
 
     def remove_borrower(self, protocol: str, address: str):
         with self._lock:
-            if protocol in self._data:
-                addr_l = address.lower()
-                if addr_l in self._data[protocol]:
-                    self._data[protocol].remove(addr_l)
-                    self.save()
+            addr_l = address.lower()
+            changed = False
+            for proto in self._data:
+                if addr_l in self._data[proto]:
+                    self._data[proto].remove(addr_l)
+                    changed = True
+            if changed:
+                self.save()
 
 # ── History ───────────────────────────────────────────────────────────────────
 class HistoryStore(JsonStore):
-    def __init__(self):
-        super().__init__("history.json")
-        if not isinstance(self._data, list): self._data = []
+    def _load_initial(self) -> Any:
+        if not self.path.exists():
+            return []
+        try:
+            with self._lock:
+                with open(self.path, "r") as f:
+                    data = json.load(f)
+                    return data if isinstance(data, list) else []
+        except Exception:
+            return []
 
     def record_liquidation(self, record: Dict[str, Any]):
         with self._lock:
-            # Check for duplicate tx_hash
             if any(r.get("tx_hash") == record.get("tx_hash") for r in self._data):
                 return
 
             record["timestamp"] = record.get("timestamp") or int(time.time())
             self._data.append(record)
-            # Keep only last 1000 for performance
             if len(self._data) > 1000:
                 self._data = self._data[-1000:]
             self.save()
@@ -130,10 +137,6 @@ class HistoryStore(JsonStore):
 
 # ── Scan State ────────────────────────────────────────────────────────────────
 class StateStore(JsonStore):
-    def __init__(self):
-        super().__init__("state.json")
-        if not isinstance(self._data, dict): self._data = {}
-
     def set_last_block(self, protocol: str, block: int):
         with self._lock:
             self._data[protocol] = block
@@ -143,32 +146,73 @@ class StateStore(JsonStore):
         with self._lock:
             return self._data.get(protocol, 0)
 
-# ── Positions ─────────────────────────────────────────────────────────────────
-class PositionStore(JsonStore):
-    def __init__(self):
-        super().__init__("positions.json")
-        if not isinstance(self._data, dict): self._data = {}
-
-    def upsert_position(self, pos: Dict[str, Any]):
+# ── Categorized Position Stores ───────────────────────────────────────────────
+class CategorizedPositionStore(JsonStore):
+    def upsert(self, pos: Dict[str, Any]):
         with self._lock:
-            key = f"{pos.get('protocol')}:{pos.get('user', '').lower()}"
+            addr = pos.get('address') or pos.get('user')
+            if not addr: return
+            key = f"{pos.get('protocol')}:{addr.lower()}"
+            # Ensure address field is present
+            pos["address"] = addr
             pos["last_updated"] = int(time.time())
             self._data[key] = pos
             self.save()
 
-    def get_all_positions(self) -> List[Dict[str, Any]]:
-        with self._lock:
-            return list(self._data.values())
-
-    def remove_position(self, protocol: str, user: str):
+    def remove(self, protocol: str, user: str):
         with self._lock:
             key = f"{protocol}:{user.lower()}"
             if key in self._data:
                 del self._data[key]
                 self.save()
 
+    def get_all_list(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            return list(self._data.values())
+
 # Singletons
-borrowers = BorrowerStore()
-history   = HistoryStore()
-state     = StateStore()
-positions = PositionStore()
+borrowers = BorrowerStore("borrowers.json")
+history   = HistoryStore("history.json")
+state     = StateStore("state.json")
+
+critical_store = CategorizedPositionStore("critical.json")
+zombies_store  = CategorizedPositionStore("zombies.json")
+watching_store = CategorizedPositionStore("watching.json")
+
+# Compatibility layer for legacy positions.json
+positions = CategorizedPositionStore("positions.json")
+
+def cleanup_categorized_positions(protocol: str, user: str, current_category: str):
+    """Ensures a position only exists in ONE category file."""
+    for cat_name, store in [("critical", critical_store), ("zombie", zombies_store), ("watching", watching_store)]:
+        if cat_name != current_category:
+            store.remove(protocol, user)
+    # Also remove from legacy positions.json
+    positions.remove(protocol, user)
+
+def save_categorized_position(pos: Dict[str, Any]):
+    """Smart router to save position into correct JSON file based on HF."""
+    hf = float(pos.get("health_factor", 9.9))
+    proto = pos.get("protocol")
+    user = pos.get("address") or pos.get("user")
+
+    if not proto or not user: return
+
+    category = "other"
+    if hf < 1.0:
+        category = "critical"
+        pos["is_zombie"] = False
+        critical_store.upsert(pos)
+    elif hf < 1.05:
+        category = "zombie"
+        pos["is_zombie"] = True
+        zombies_store.upsert(pos)
+    elif hf < 1.15:
+        category = "watching"
+        pos["is_zombie"] = False
+        watching_store.upsert(pos)
+    else:
+        # If HF recovered > 1.15, it should be in any of these files
+        pass
+
+    cleanup_categorized_positions(proto, user, category)

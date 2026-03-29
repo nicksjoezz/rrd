@@ -10,7 +10,7 @@ Edge advantages:
   1. Multi-protocol — most bots only watch Aave
   2. No minimum size filter — small positions on Arbitrum are profitable
   3. Long-tail asset detection (ARB, GMX, LINK with 10–15% bonus)
-  4. Zombie queue integration for HF 0.95-1.05 pre-queuing
+  4. Zombie queue integration for HF 0.95-1.15 pre-queuing
 """
 
 import logging
@@ -31,7 +31,7 @@ from .swap_router import get_best_swap
 
 from .database import (
     upsert_borrowers, get_borrowers, upsert_position,
-    get_last_scan_block, set_last_scan_block
+    get_last_scan_block, set_last_scan_block, remove_position
 )
 from .velocity import VelocityTracker
 from .zombie_queue import ZombieQueue
@@ -76,11 +76,6 @@ class ProtocolMonitor:
     def load_borrowers_from_events(self, from_block: int, to_block: int, on_batch_found=None):
         """
         Scan Borrow event logs using raw eth_getLogs — NOT the web3 event helper.
-
-        Root cause fix: Aave V3 Borrow event has interestRateMode as an internal
-        enum type. web3.py's event helper fails to decode it ('anonymous' error).
-        Raw eth_getLogs bypasses all ABI decoding — onBehalfOf lives in topics[2]
-        as a standard 32-byte indexed address, which we read directly.
         """
         w3    = get_public_web3()
         chunk = cfg("scanning", "event_scan_chunk")
@@ -228,9 +223,6 @@ class ProtocolMonitor:
         """
         Check a single user's health factor. Returns position dict if liquidatable
         or approaching liquidation. Returns None if healthy.
-
-        Now uses real-time local price data to detect health factor drops BEFORE
-        the protocol's on-chain oracle updates.
         """
         try:
             if account_data:
@@ -245,12 +237,10 @@ class ProtocolMonitor:
             if total_debt_base == 0: return None
 
             # ── Real-Time Edge ──────────────────────────────────────────
-            # Re-calculate HF using local price data
             hf = health_factor_float(hf_raw)
-            zombie_entry = cfg("strategy", "zombie_queue", "entry_hf")
             best_info = None
 
-            # Optimization: Only deep-dive if the position is within striking distance
+            # Watch everything up to 1.15
             if hf < 1.3:
                 best_info = self._get_best_tokens_and_fresh_hf(user)
                 if best_info: hf = best_info["fresh_hf"]
@@ -261,9 +251,9 @@ class ProtocolMonitor:
             max_debt = cfg("strategy", "max_debt_usd")
 
             if debt_usd < min_debt or debt_usd > max_debt: return None
-            if hf > zombie_entry: return None
 
-            # Ensure we have best_info if we're proceeding
+            if hf > 1.15: return None
+
             if not best_info:
                 best_info = self._get_best_tokens_and_fresh_hf(user)
             if not best_info: return None
@@ -286,6 +276,7 @@ class ProtocolMonitor:
             return {
                 "protocol":          self.name,
                 "user":              user,
+                "address":           user,
                 "collateral_token":  col_token,
                 "collateral_symbol": col_symbol,
                 "collateral_bonus":  col_bonus,
@@ -309,7 +300,6 @@ class ProtocolMonitor:
     def scan_users(self, users: List[str], zombie_queue: Optional[ZombieQueue] = None) -> List[dict]:
         """
         Scan a specific list of borrowers using Multicall3.
-        Returns list of liquidatable positions.
         """
         liquidatable = []
         if not users: return []
@@ -318,13 +308,11 @@ class ProtocolMonitor:
         mc = w3.eth.contract(address=MULTICALL3_ADDR, abi=MULTICALL3_ABI)
         
         batch_size = cfg("scanning", "batch_size") or 500
-        zombie_entry = cfg("strategy", "zombie_queue", "entry_hf")
 
         for i in range(0, len(users), batch_size):
             chunk = users[i : i + batch_size]
             calls = []
             
-            # Step 1: Batch getUserAccountData
             for user in chunk:
                 call_data = self.pool.encodeABI("getUserAccountData", [checksum(user)])
                 calls.append({"target": self.pool.address, "callData": call_data})
@@ -332,27 +320,29 @@ class ProtocolMonitor:
             try:
                 _, return_data = mc.functions.aggregate(calls).call()
                 
-                # Step 2: Process results
                 for j, raw_res in enumerate(return_data):
                     user = chunk[j]
                     dec = w3.codec.decode(["uint256", "uint256", "uint256", "uint256", "uint256", "uint256"], raw_res)
                     
                     if dec[1] == 0:
-                        # Optimization: position repaid, remove from active discovery
-                        # if it was in our set
                         if user in self._borrowers:
                             self._borrowers.remove(user)
                             from .database import remove_borrower
                             remove_borrower(self.name, user)
                         if zombie_queue:
                             zombie_queue.remove(self.name, user)
+                        remove_position(self.name, user)
                         continue
                     
                     hf = health_factor_float(dec[5])
-                    if hf > zombie_entry: continue
+                    # Watch everything up to 1.15
+                    if hf > 1.2: continue # Slight buffer
                     
                     pos = self.check_position(user, account_data=dec)
                     if pos:
+                        # Persist to categorized JSON
+                        upsert_position(pos)
+
                         if zombie_queue:
                             result = zombie_queue.update(self.name, user, pos)
                             if result == "fire":
@@ -364,7 +354,9 @@ class ProtocolMonitor:
                 logger.error(f"[{self.name}] Multicall batch error: {e}")
                 for user in chunk:
                     pos = self.check_position(user)
-                    if pos: liquidatable.append(pos)
+                    if pos:
+                        upsert_position(pos)
+                        if hf <= 1.0: liquidatable.append(pos)
 
         return liquidatable
 
@@ -377,7 +369,6 @@ from .zombie_queue import get_zombie_queue
 class MultiProtocolMonitor:
     """
     Manages multiple ProtocolMonitor instances.
-    Unified interface for scanning all protocols at once.
     """
 
     def __init__(self, on_liquidatable=None):
@@ -392,24 +383,17 @@ class MultiProtocolMonitor:
 
     def _init_protocols(self):
         protocols = cfg("protocols")
-        
-        # Signatures
         AAVE_V3_BORROW = "0xb3d084820fb1a9decffb176436bd02558d15fac9b0ddfed8c465bc7359d7dce0"
         AAVE_V2_BORROW = "0xc6a898309e823ee50bac64e45ca8adba6690e99e7841c45d39871800d985639b"
 
         for name, pcfg in protocols.items():
-            if not pcfg.get("enabled", False):
-                continue
+            if not pcfg.get("enabled", False): continue
             pool_addr = pcfg.get("pool", "")
             dp_addr   = pcfg.get("data_provider", "")
-            if not pool_addr or pool_addr.startswith("0x000"):
-                logger.warning(f"Protocol {name} has no valid pool address -- skipping")
-                continue
+            if not pool_addr or pool_addr.startswith("0x000"): continue
             
-            # Default to V3 topic, override for Radiant (V2)
             topic = AAVE_V3_BORROW
-            if "radiant" in name.lower():
-                topic = AAVE_V2_BORROW
+            if "radiant" in name.lower(): topic = AAVE_V2_BORROW
 
             self.monitors[name] = ProtocolMonitor(
                 name=name,
@@ -417,41 +401,22 @@ class MultiProtocolMonitor:
                 data_provider_addr=dp_addr,
                 borrow_topic=topic
             )
-            logger.info(f"Initialized protocol monitor: {name} (topic: {topic[:10]}...)")
+            logger.info(f"Initialized protocol monitor: {name}")
 
     def load_all_borrowers(self):
-        """
-        Load borrowers using DB cache + incremental event scan.
-        1. SQLite DB cache (instant restart recovery)
-        2. Borrow event scan (initial 50-day window on first run)
-        """
         w3            = get_web3()
         current_block = w3.eth.block_number
 
-        # -- DB cache + incremental event scan for all protocols ----------------
         for name, monitor in self.monitors.items():
             monitor.load_borrowers_from_db()
             last_block = get_last_scan_block(name)
-
-            # Arbitrum block speed: ~4 blocks/second = 345,600 blocks/day
-            # Use 50 days (~17.28M blocks) for a thorough initial borrower list
-            # Arbitrum block speed is approx 4 blocks/sec (345,600/day)
             ARBITRUM_50_DAYS = 17_280_000
 
             if last_block == 0:
                 from_block = max(0, current_block - ARBITRUM_50_DAYS)
-                logger.info(
-                    f"[{name}] First run -- scanning last 50 days "
-                    f"({ARBITRUM_50_DAYS:,} blocks on Arbitrum)"
-                )
             else:
                 from_block = last_block + 1
-                logger.info(
-                    f"[{name}] Incremental: blocks {from_block:,} -> {current_block:,}"
-                )
 
-
-        # -- Start incremental scan --------------------------------------------
         for name, monitor in self.monitors.items():
             last_block = get_last_scan_block(name)
             if last_block == 0:
@@ -460,35 +425,20 @@ class MultiProtocolMonitor:
                 from_block = last_block + 1
             
             if from_block < current_block:
-                # Streaming callback: verifies borrowers as they are found
                 def _streaming_callback(proto_name, users):
                     m = self.monitors.get(proto_name)
                     if not m: return
-                    
                     found = m.scan_users(users, zombie_queue=self.zombie_queue)
-
-                    # Log active set reduction if positions were repaid
-                    # scan_users already removes from m._borrowers internally now
-
                     if found:
-                        logger.info(f"[{proto_name}] Streaming verification: {len(found)} at-risk positions found!")
-
                         liquidatable = [p for p in found if p.get("health_factor", 2.0) <= 1.0]
-                        for p in liquidatable:
-                            logger.warning(f"[STREAMS] LIQUIDATABLE: {p['user']} HF={p['health_factor']:.4f}")
-
                         if liquidatable and self.on_liquidatable:
-                            logger.info(f"[STREAMS] Triggering immediate execution for {len(liquidatable)} positions")
                             self.on_liquidatable(liquidatable)
-
-                        # Immediately persist found positions for UI visibility
                         for pos in found:
                             upsert_position(pos)
 
                 monitor.load_borrowers_from_events(from_block, current_block, on_batch_found=_streaming_callback)
 
     def refresh_borrowers(self):
-        """Incremental update -- scan only new blocks found since last refresh."""
         try:
             w3 = get_web3()
             current_block = w3.eth.block_number
@@ -496,11 +446,7 @@ class MultiProtocolMonitor:
 
         for name, monitor in self.monitors.items():
             last_block = get_last_scan_block(name)
-            if last_block == 0:
-                # Fallback if first run didn't finish properly
-                from_block = max(0, current_block - 1000)
-            else:
-                from_block = last_block + 1
+            from_block = (last_block + 1) if last_block > 0 else (current_block - 1000)
             
             if from_block < current_block:
                 def _streaming_callback(proto_name, users):
@@ -510,77 +456,60 @@ class MultiProtocolMonitor:
                     if found:
                         liquidatable = [p for p in found if p.get("health_factor", 2.0) <= 1.0]
                         if liquidatable and self.on_liquidatable:
-                            logger.info(f"[REFRESH] Triggering immediate execution for {len(liquidatable)} positions")
                             self.on_liquidatable(liquidatable)
-
-                        # Immediately persist found positions for UI visibility
                         for pos in found:
                             upsert_position(pos)
 
                 monitor.load_borrowers_from_events(from_block, current_block, on_batch_found=_streaming_callback)
 
     def scan_all_protocols(self) -> List[dict]:
-        """
-        Scan all enabled protocols. Returns list of liquidatable positions
-        across all protocols, sorted by profit potential.
-        Also records HF velocity for fast-falling detection.
-        """
-        all_positions = []
+        all_liquidatable = []
 
+        # 1. Scan everything
         for name, monitor in self.monitors.items():
             try:
-                positions = monitor.scan_all(zombie_queue=self.zombie_queue)
-                all_positions.extend(positions)
-                logger.debug(f"[{name}] Found {len(positions)} liquidatable positions")
+                liquidatable = monitor.scan_all(zombie_queue=self.zombie_queue)
+                all_liquidatable.extend(liquidatable)
             except Exception as e:
                 logger.error(f"[{name}] Scan error: {e}")
 
-        # Record velocity and upsert all positions
-        # Including non-liquidatable but "watching" positions
-        all_monitored = {f"{p['protocol']}:{p['user'].lower()}": p for p in all_positions}
-        zombies = self.zombie_queue.get_watching()
-        for z in zombies:
-            key = f"{z['protocol']}:{z['user'].lower()}"
-            if key not in all_monitored:
-                all_monitored[key] = {
-                    "user":              z["user"],
-                    "protocol":          z["protocol"],
-                    "health_factor":     z.get("health_factor"),
-                    "total_debt_usd":    z.get("total_debt_usd"),
-                    "total_col_usd":     z.get("total_col_usd"),
-                    "collateral_token":  z.get("collateral_token"),
-                    "debt_token":        z.get("debt_token"),
-                }
-
-        # Clear out old positions that have zero debt or are healthy and not in zombies
-        # This keeps the tracking list lean.
-        from .persistence import positions as pos_store
-        current_store = pos_store.get_all_positions()
-        to_delete = []
-        for p in current_store:
-            key = f"{p['protocol']}:{p['address'].lower() if 'address' in p else p['user'].lower()}"
-            if key not in all_monitored:
-                to_delete.append((p['protocol'], p['address'] if 'address' in p else p['user']))
-
-        for proto, user in to_delete:
-            pos_store.remove_position(proto, user)
-
-        # Update remaining
-        for pos in all_monitored.values():
+        # 2. Track velocity
+        watching = self.zombie_queue.get_watching()
+        for pos in watching:
             self.velocity.record(pos["protocol"], pos["user"], pos["health_factor"])
-            upsert_position(pos)
 
-        # Also flush any zombie queue items that are now ready
+        # 3. Cleanup stale positions from JSON files
+        # A position is stale if it's NOT in the current scan results (meaning HF > 1.15 or debt = 0)
+        # We'll use a set of currently "active" (at-risk) keys
+        active_keys = set()
+        # We can't easily get all active from the monitors without re-scanning
+        # So we'll rely on the fact that if a position is in zombie_queue, it's active.
+        # But we also have "Watching" which might be up to 1.15.
+
+        # Let's collect all positions returned by check_position in this cycle.
+        # Actually, scan_all already calls upsert_position for everything it finds.
+
+        # To truly clean up, we should check which positions in the JSON stores
+        # WERE NOT updated in this cycle.
+        from .persistence import critical_store, zombies_store, watching_store
+        now = time.time()
+        for store in [critical_store, zombies_store, watching_store]:
+            stored_items = store.get_all_list()
+            for item in stored_items:
+                # If not updated in the last 2 cycles (interval * 2), remove it
+                if now - item.get("last_updated", 0) > (cfg("scanning", "main_loop_interval_seconds") * 2.5):
+                    remove_position(item['protocol'], item['address'])
+
+        # 4. Ready to fire
         ready = self.zombie_queue.get_ready()
         for pos in ready:
-            if pos not in all_positions:
-                all_positions.append(pos)
+            if pos not in all_liquidatable:
+                all_liquidatable.append(pos)
 
-        # Evict stale entries
         self.zombie_queue.evict_old()
         self.velocity.cleanup()
 
-        return all_positions
+        return all_liquidatable
 
     def get_stats(self) -> dict:
         total = sum(m.get_borrower_count() for m in self.monitors.values())

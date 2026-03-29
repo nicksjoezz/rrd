@@ -34,70 +34,19 @@ class ZombieQueue:
     Entry at HF <= entry_hf (default 1.05)
     Fire  at HF <= fire_hf  (default 1.0)
     
-    Persistent version — saves to zombies.json
+    In-memory tracker. Persistence is handled by the monitor's call to upsert_position.
     """
 
-    def __init__(self, entry_hf: float = 1.05, fire_hf: float = 1.0, 
-                 filename: str = "zombies.json"):
+    def __init__(self, entry_hf: float = 1.05, fire_hf: float = 1.0):
         self.entry_hf = entry_hf
         self.fire_hf  = fire_hf
-        self.filename = filename
         self._queue: dict = {}    # address+protocol -> position data
         self._lock  = threading.Lock()
-        self._load()
-
-    def _load(self):
-        """Load queue from disk on startup."""
-        first_load = not hasattr(ZombieQueue, '_already_logged_load')
-        if first_load:
-            ZombieQueue._already_logged_load = True
-
-        if not os.path.exists(self.filename):
-            self._queue = {}
-            return
-
-        try:
-            with open(self.filename, 'r') as f:
-                data = json.load(f)
-            
-            def _decode_hex(obj):
-                if isinstance(obj, dict): return {k: _decode_hex(v) for k, v in obj.items()}
-                if isinstance(obj, list): return [_decode_hex(x) for x in obj]
-                if isinstance(obj, str) and obj.startswith("hex:"): return bytes.fromhex(obj[4:])
-                return obj
-
-            self._queue = _decode_hex(data)
-            if first_load and self._queue:
-                logger.info(f"[ZOMBIE] Initialized with {len(self._queue)} positions from {self.filename}")
-        except Exception as e:
-            logger.error(f"[ZOMBIE] Failed to load {self.filename}: {e}")
-
-    def _save(self):
-        """Save queue to disk atomically."""
-        class BytesEncoder(json.JSONEncoder):
-            def default(self, obj):
-                if isinstance(obj, bytes):
-                    return "hex:" + obj.hex()
-                return super().default(obj)
-
-        tmp_file = self.filename + ".tmp"
-        try:
-            with open(tmp_file, 'w') as f:
-                json.dump(self._queue, f, indent=2, cls=BytesEncoder)
-            # Atomic rename (on Windows this requires os.replace or deleting first)
-            if os.path.exists(self.filename):
-                os.remove(self.filename)
-            os.rename(tmp_file, self.filename)
-        except Exception as e:
-            logger.error(f"[ZOMBIE] Failed to save {self.filename}: {e}")
-            if os.path.exists(tmp_file):
-                try: os.remove(tmp_file)
-                except: pass
 
     def update(self, protocol: str, user: str, position: dict):
         """
         Called every scan cycle. Updates or inserts position in queue.
-        Returns "fire" if position is ready for liquidation, else None.
+        Returns "fire" if position is ready for liquidation, else "watch" or None.
         """
         key = f"{protocol}:{user.lower()}"
         hf  = position.get("health_factor", 99.0)
@@ -106,7 +55,6 @@ class ZombieQueue:
             if hf <= self.fire_hf:
                 # Ready to liquidate — pop from queue and return
                 self._queue.pop(key, None)
-                self._save()
                 return "fire"
 
             elif hf <= self.entry_hf:
@@ -125,7 +73,6 @@ class ZombieQueue:
                     "queued_at": old_entry.get("queued_at", time.time()),
                     "hf_at_entry": old_entry.get("hf_at_entry", hf)
                 }
-                self._save()
                 return "watch"
 
             else:
@@ -133,7 +80,6 @@ class ZombieQueue:
                 if key in self._queue:
                     logger.info(f"[ZOMBIE] Recovered {user[:8]}... HF={hf:.4f} -- removed from queue")
                     self._queue.pop(key, None)
-                    self._save()
                 return None
 
     def get_ready(self) -> list:
@@ -156,28 +102,22 @@ class ZombieQueue:
         with self._lock:
             if key in self._queue:
                 self._queue.pop(key)
-                self._save()
 
     def evict_old(self, max_age_seconds: int = 3600):
         """Remove positions that have been in queue > max_age (likely recovered)."""
         now = time.time()
         with self._lock:
-            before = len(self._queue)
             stale = [k for k, v in self._queue.items()
                      if now - v.get("queued_at", now) > max_age_seconds]
             for k in stale:
                 logger.debug(f"[ZOMBIE] Evicted stale entry: {k}")
                 del self._queue[k]
-            
-            if len(self._queue) != before:
-                self._save()
 
     def summary(self) -> str:
         with self._lock:
             if not self._queue:
                 return "Zombie queue: empty"
             lines = [f"Zombie queue ({len(self._queue)} positions):"]
-            # Cast to list of items to help linter with dictionary types
             items = list(self._queue.items())
             items.sort(key=lambda x: float(x[1].get("health_factor", 99)))
             for k, v in items:

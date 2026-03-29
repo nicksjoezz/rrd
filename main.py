@@ -367,69 +367,30 @@ def api_profit_history():
 
 def get_merged_positions():
     """
-    Unified source of truth: Merges persistent JSON positions with
-    live Zombie Queue data. Syncs 100% backend/frontend alignment.
+    Unified source of truth: Aggregates strictly from categorized JSON stores.
+    Syncs 100% backend/frontend alignment for Critical, Danger, and Watching.
     """
     try:
-        from bot.persistence import positions as pos_store
-        from bot.zombie_queue import get_zombie_queue
+        from bot.persistence import critical_store, zombies_store, watching_store
 
-        # 1. Start with persistent JSON positions
-        positions = pos_store.get_all_positions()
-        pos_map = {}
-        for p in positions:
-            addr = p.get('address') or p.get('user')
-            if not addr: continue
-            key = f"{p['protocol']}:{addr.lower()}"
-            pos_map[key] = {
-                "address":          addr,
-                "protocol":         p["protocol"],
-                "health_factor":    float(p.get("health_factor", 0)),
-                "total_debt_usd":   float(p.get("total_debt_usd", 0)),
-                "total_col_usd":    float(p.get("total_col_usd", 0)),
-                "collateral_token": p.get("collateral_token"),
-                "debt_token":       p.get("debt_token"),
-                "last_updated":     p.get("last_updated"),
-                "is_zombie":        False
-            }
+        all_pos = []
+        all_pos.extend(critical_store.get_all_list())
+        all_pos.extend(zombies_store.get_all_list())
+        all_pos.extend(watching_store.get_all_list())
 
-        # 2. Merge with current Zombie Queue
-        zq = get_zombie_queue(
-            entry_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("entry_hf", 1.05)),
-            fire_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("fire_hf", 1.0))
-        )
-        zombies = zq.get_watching()
+        # Ensure UI flags are consistent with HF thresholds
+        for p in all_pos:
+            hf = float(p.get("health_factor", 0))
+            # "Danger" zone in UI matches zombies.json (1.0 - 1.05)
+            p["is_zombie"] = (1.0 <= hf < 1.05)
+            # Standardize address field for UI
+            if "user" in p and "address" not in p:
+                p["address"] = p["user"]
 
-        for z in zombies:
-            key = f"{z['protocol']}:{z['user'].lower()}"
-            hf = float(z.get("health_factor", 0))
-
-            # Key Logic: is_zombie is True only if HF >= 1.0 (approaching)
-            # If HF drops < 1.0 it should be shown as CRITICAL, not ZOMBIE.
-            is_zombie = hf >= 1.0
-
-            z_data = {
-                "address":          z["user"],
-                "protocol":         z["protocol"],
-                "health_factor":    hf,
-                "total_debt_usd":   float(z.get("total_debt_usd", 0)),
-                "total_col_usd":    float(z.get("total_col_usd", 0)),
-                "collateral_token": z.get("collateral_token"),
-                "debt_token":       z.get("debt_token"),
-                "last_updated":     z.get("queued_at"),
-                "is_zombie":        is_zombie
-            }
-            if key not in pos_map:
-                pos_map[key] = z_data
-            else:
-                # Zombie data overrides persistent data for real-time accuracy
-                # But only if it's actually in striking distance
-                pos_map[key].update(z_data)
-
-        return sorted(pos_map.values(), key=lambda x: x.get("health_factor", 9.9))
+        return sorted(all_pos, key=lambda x: x.get("health_factor", 9.9))
     except Exception as e:
-        logger.error(f"Error merging zombie positions: {e}")
-        return positions if 'positions' in locals() else []
+        logger.error(f"Error aggregating categorized positions: {e}")
+        return []
 
 @app.route("/api/positions")
 def api_positions():
