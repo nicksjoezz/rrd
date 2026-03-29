@@ -194,6 +194,9 @@ class ProtocolMonitor:
 
                 if col_bal > 0:
                     usd_val = (col_bal / 10**decimals) * price
+                    if price == 0:
+                        # Safety: If price discovery fails, do not proceed with 0.0000 HF
+                        return None
                     total_fresh_weighted_col += usd_val * config["threshold"]
                     score = usd_val * (1 + config["bonus"]) if cfg("strategy", "prioritize_high_bonus") else usd_val
                     if score > best_col_score:
@@ -202,6 +205,9 @@ class ProtocolMonitor:
 
                 if debt_bal > 0:
                     usd_val = (debt_bal / 10**decimals) * price
+                    if price == 0:
+                        # Safety: If price discovery fails, do not proceed with 0.0000 HF
+                        return None
                     total_fresh_debt += usd_val
                     if usd_val > best_debt_score:
                         best_debt_score = usd_val

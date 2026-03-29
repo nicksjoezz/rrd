@@ -353,16 +353,37 @@ class LiquidationExecutor:
         )
 
         try:
-            if not self._account or not self._contract:
-                logger.warning(f"[{protocol}] Skipping {mode} -- missing private_key or liquidator_contract")
-                return None
-
-            gas_params = get_gas_params(profit_info["estimated_profit_usd"])
-            tx         = self._build_tx(position, gas_params)
-
             if mode == "simulate":
+                # In simulate mode, we can proceed even without a wallet/contract
+                # by doing a "Profit-only" simulation.
+                if not self._account or not self._contract:
+                    sim_id = f"sim-profit-{int(time.time())}-{user[:6]}"
+                    logger.info(f"[{protocol}] SIMULATED [PROFIT-ONLY] (No contract/wallet) | id: {sim_id}")
+                    record_liquidation(
+                        tx_hash=sim_id,
+                        protocol=protocol,
+                        borrower=user,
+                        col_token=position["collateral_token"],
+                        debt_token=position["debt_token"],
+                        debt_usd=profit_info["debt_to_cover_usd"],
+                        est_profit=profit_info["estimated_profit_usd"],
+                        gas_used=0,
+                        block=self._w3.eth.block_number
+                    )
+                    return sim_id
+
+                # If we HAVE a contract, do the full eth_call simulation
+                gas_params = get_gas_params(profit_info["estimated_profit_usd"])
+                tx         = self._build_tx(position, gas_params)
                 return self._simulate_tx(tx, position, profit_info)
-            else:
+
+            else: # LIVE mode
+                if not self._account or not self._contract:
+                    logger.warning(f"[{protocol}] Skipping LIVE -- missing private_key or liquidator_contract")
+                    return None
+
+                gas_params = get_gas_params(profit_info["estimated_profit_usd"])
+                tx         = self._build_tx(position, gas_params)
                 return self._live_tx(tx, position, profit_info)
 
         except Exception as e:

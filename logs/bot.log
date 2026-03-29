@@ -526,3 +526,31 @@
 2026-03-29 06:19:59 [INFO] liquidation_bot.zombie: [ZOMBIE] Initialized with 1 positions from zombies.json
 2026-03-29 06:27:44 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
 2026-03-29 06:27:44 [INFO] liquidation_bot.zombie: [ZOMBIE] Initialized with 1 positions from zombies.json
+2026-03-29 07:04:41 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
+2026-03-29 07:04:41 [INFO] liquidation_bot.zombie: [ZOMBIE] Initialized with 1 positions from zombies.json
+2026-03-29 07:05:48 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
+2026-03-29 07:05:48 [INFO] liquidation_bot.zombie: [ZOMBIE] Initialized with 1 positions from zombies.json
+2026-03-29 07:06:53 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
+2026-03-29 07:06:53 [INFO] liquidation_bot.zombie: [ZOMBIE] Initialized with 1 positions from zombies.json
+2026-03-29 07:10:50 [INFO] liquidation_bot.zombie: [ZOMBIE] Initialized with 1 positions from zombies.json
+2026-03-29 07:10:55 [INFO] liquidation_bot.zombie: [ZOMBIE] Queued 0x9CD61C... HF=1.0208 debt=$23576 [Aave V3]
+2026-03-29 07:10:57 [INFO] liquidation_bot.zombie: [ZOMBIE] Queued 0xe375E3... HF=1.0457 debt=$83582 [Aave V3]
+2026-03-29 07:10:58 [INFO] liquidation_bot.zombie: [ZOMBIE] Queued 0xa10BB0... HF=1.0393 debt=$2981 [Aave V3]
+2026-03-29 07:10:59 [INFO] liquidation_bot.zombie: [ZOMBIE] Queued 0xbeD43f... HF=1.0215 debt=$65389 [Aave V3]
+2026-03-29 07:11:00 [INFO] liquidation_bot.zombie: [ZOMBIE] Queued 0x50Dd9B... HF=1.0191 debt=$17979 [Aave V3]
+2026-03-29 07:11:01 [INFO] liquidation_bot.zombie: [ZOMBIE] Queued 0x3b2205... HF=1.0403 debt=$4317 [Aave V3]
+2026-03-29 07:11:03 [INFO] liquidation_bot.zombie: [ZOMBIE] Queued 0x41C634... HF=1.0495 debt=$7172 [Aave V3]
+2026-03-29 07:11:05 [INFO] liquidation_bot.zombie: [ZOMBIE] Queued 0x30A444... HF=1.0172 debt=$20246 [Aave V3]
+2026-03-29 07:11:10 [INFO] liquidation_bot.zombie: [ZOMBIE] Queued 0xBd420E... HF=1.0411 debt=$4904 [Aave V3]
+2026-03-29 07:11:10 [INFO] liquidation_bot.zombie: [ZOMBIE] Queued 0x949D5a... HF=1.0451 debt=$643 [Aave V3]
+2026-03-29 07:11:16 [INFO] liquidation_bot.zombie: [ZOMBIE] Queued 0x57d1DB... HF=1.0400 debt=$227 [Aave V3]
+2026-03-29 07:11:19 [INFO] liquidation_bot.zombie: [ZOMBIE] Queued 0x4e7864... HF=1.0489 debt=$88726 [Aave V3]
+2026-03-29 07:11:21 [WARNING] liquidation_bot.swap: No swap quote found for 0xDA1000->0xaf88d0
+2026-03-29 07:11:21 [INFO] liquidation_bot.zombie: [ZOMBIE] Queued 0xFe9CBA... HF=1.0498 debt=$302 [Aave V3]
+2026-03-29 07:11:22 [INFO] liquidation_bot.zombie: [ZOMBIE] Queued 0x5e0F7D... HF=1.0113 debt=$4930 [Aave V3]
+2026-03-29 07:11:26 [INFO] liquidation_bot.zombie: [ZOMBIE] Queued 0x184B49... HF=1.0379 debt=$95452 [Aave V3]
+2026-03-29 07:11:36 [WARNING] liquidation_bot.swap: No swap quote found for 0xDA1000->0xaf88d0
+2026-03-29 07:13:25 [INFO] liquidation_bot.zombie: [ZOMBIE] Initialized with 16 positions from zombies.json
+2026-03-29 07:13:25 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
+2026-03-29 07:15:05 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
+2026-03-29 07:15:05 [INFO] liquidation_bot.zombie: [ZOMBIE] Initialized with 16 positions from zombies.json

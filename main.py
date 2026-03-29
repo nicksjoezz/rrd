@@ -403,6 +403,11 @@ def get_merged_positions():
         for z in zombies:
             key = f"{z['protocol']}:{z['user'].lower()}"
             hf = float(z.get("health_factor", 0))
+
+            # Key Logic: is_zombie is True only if HF >= 1.0 (approaching)
+            # If HF drops < 1.0 it should be shown as CRITICAL, not ZOMBIE.
+            is_zombie = hf >= 1.0
+
             z_data = {
                 "address":          z["user"],
                 "protocol":         z["protocol"],
@@ -412,7 +417,7 @@ def get_merged_positions():
                 "collateral_token": z.get("collateral_token"),
                 "debt_token":       z.get("debt_token"),
                 "last_updated":     z.get("queued_at"),
-                "is_zombie":        True
+                "is_zombie":        is_zombie
             }
             if key not in pos_map:
                 pos_map[key] = z_data

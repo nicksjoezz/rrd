@@ -80,8 +80,10 @@ def get_stats() -> dict:
     from main import get_merged_positions
     all_merged = get_merged_positions()
 
+    # Zombie count should exactly match what is flagged as 'is_zombie' (HF 1.0 - 1.05)
     stats["zombie_count"] = len([p for p in all_merged if p.get("is_zombie")])
     stats["crit_count"]   = len([p for p in all_merged if p.get("health_factor", 9.9) < 1.0])
+    # Danger/Warning count matches the UI 'Danger (1.0-1.05)' chip
     stats["warn_count"]   = len([p for p in all_merged if 1.0 <= p.get("health_factor", 9.9) < 1.05])
 
     return stats
