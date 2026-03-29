@@ -539,7 +539,7 @@ def api_wallet_balances():
 
         eth_wei       = w3.eth.get_balance(account.address)
         eth_bal       = float(w3.from_wei(eth_wei, "ether"))
-        eth_price     = get_token_price_usd("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1") or 3000.0
+        eth_price     = get_token_price_usd(cfg("network", "weth"))
 
         result = {
             "wallet":    account.address,
@@ -719,7 +719,7 @@ def api_health_check():
             add(f"Protocol: {name}", "fail", str(e)[:60])
 
     try:
-        vault = cfg_data.get("flash_loan", {}).get("balancer_vault", "0xBA12222222228d8Ba445958a75a0704d566BF2C8")
+        vault = cfg_data.get("flash_loan", {}).get("balancer_vault")
         code  = w3.eth.get_code(w3.to_checksum_address(vault))
         add("Balancer Vault (0% fee)", "ok" if len(code) > 2 else "fail",
             vault[:10] + "... reachable" if len(code) > 2 else "Not found")
@@ -742,7 +742,8 @@ def api_health_check():
         add("Oracle Feeds", "warn", "Chainlink watching disabled")
 
     try:
-        code = w3.eth.get_code(w3.to_checksum_address("0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6"))
+        quoter = cfg_data.get("network", {}).get("uniswap_v3_quoter")
+        code = w3.eth.get_code(w3.to_checksum_address(quoter))
         add("Uniswap V3 Quoter", "ok" if len(code) > 2 else "fail",
             "Reachable" if len(code) > 2 else "Not found")
     except Exception as e:

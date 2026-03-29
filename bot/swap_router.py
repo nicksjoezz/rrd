@@ -23,7 +23,7 @@ from .utils import get_web3, cfg, checksum, get_swap_fee
 logger = logging.getLogger("liquidation_bot.swap")
 
 # Uniswap V3 Quoter on Arbitrum (read-only price quotes)
-QUOTER_ADDRESS = "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6"
+QUOTER_ADDRESS = cfg("network", "uniswap_v3_quoter")
 
 QUOTER_ABI = [
     {
@@ -51,7 +51,7 @@ QUOTER_ABI = [
     }
 ]
 
-WETH_ADDRESS = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+WETH_ADDRESS = cfg("network", "weth")
 
 
 def encode_path(token_in: str, fee1: int, token_mid: str, fee2: int, token_out: str) -> bytes:

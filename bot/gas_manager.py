@@ -124,8 +124,8 @@ def estimate_gas_cost_usd(gas_used: int = None) -> float:
     total_fee_wei = gas_lim * (base_fee + prio)
     eth_spent     = total_fee_wei / 1e18
 
-    weth_addr = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
-    eth_price = get_token_price_usd(weth_addr) or 3000.0
+    weth_addr = ucfg("network", "weth")
+    eth_price = get_token_price_usd(weth_addr)
 
     return eth_spent * eth_price
 

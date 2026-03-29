@@ -4,7 +4,10 @@
     "rpc_ws": "wss://arb1.arbitrum.io/ws",
     "alchemy_key": "9fVR5rZUC-g2L5zbeywTA",
     "chain_id": 42161,
-    "chain_name": "Arbitrum One"
+    "chain_name": "Arbitrum One",
+    "weth": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+    "multicall3": "0xcA11bde05977b3631167028862bE2a173976CA11",
+    "uniswap_v3_quoter": "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6"
   },
   "wallet": {
     "private_key": "YOUR_PRIVATE_KEY_HERE",

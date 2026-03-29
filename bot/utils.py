@@ -251,7 +251,10 @@ ADDRESSES_PROVIDER_ABI = json.loads('''[
 ]''')
 
 # ── Multicall3 (Arbitrum) ───────────────────────────────────────────────────
-MULTICALL3_ADDR = "0xcA11bde05977b3631167028862bE2a173976CA11"
+def get_multicall3_addr() -> str:
+    return cfg("network", "multicall3")
+
+MULTICALL3_ADDR = get_multicall3_addr()
 MULTICALL3_ABI  = json.loads('[{"inputs":[{"components":[{"internalType":"address","name":"target","type":"address"},{"internalType":"bytes","name":"callData","type":"bytes"}],"internalType":"struct Multicall3.Call[]","name":"calls","type":"tuple[]"}],"name":"aggregate","outputs":[{"internalType":"uint256","name":"blockNumber","type":"uint256"},{"internalType":"bytes[]","name":"returnData","type":"bytes[]"}],"stateMutability":"payable","type":"function"}]')
 
 # ── Token helpers ─────────────────────────────────────────────────────────────

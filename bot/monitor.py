@@ -186,7 +186,6 @@ class ProtocolMonitor:
                 if col_bal == 0 and debt_bal == 0: continue
 
                 price = get_token_price_usd(addr)
-                if price == 0: price = 1.0 # fallback
 
                 config = self.reserve_configs.get(addr_l, {
                     "decimals": info["decimals"], "threshold": 0.8, "bonus": info["liquidation_bonus"]

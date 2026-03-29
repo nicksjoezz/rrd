@@ -136,9 +136,7 @@ def flag_emode_risk_positions(positions: list, pool_address: str = None) -> list
     if pool_address is None:
         # Default to Aave V3 pool from config
         protocols  = cfg("protocols")
-        pool_address = protocols.get("aave_v3", {}).get(
-            "pool", "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
-        )
+        pool_address = protocols.get("aave_v3", {}).get("pool")
 
     detector = EModeDetector(pool_address)
     enriched = [detector.enrich_position(p) for p in positions]

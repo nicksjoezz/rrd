@@ -88,11 +88,6 @@ def get_token_price_usd(token_address: str) -> float:
             except Exception as e:
                 logger.debug(f"Chainlink price fetch failed for {sym}: {e}")
 
-    # Fallback: rough price from known stables
-    if token_info:
-        sym = token_info["symbol"]
-        if sym in ("USDC", "USDCe", "USDT", "DAI", "GHO"):
-            return 1.0
 
     # Fallback 2: Aave Oracle
     oracle_addr = _get_aave_oracle()
@@ -107,8 +102,8 @@ def get_token_price_usd(token_address: str) -> float:
                 return price
         except Exception: pass
 
-    # Fallback 3: CoinGecko (ETH only)
-    if addr == "0x82af49447d8a07e3bd95bd0d56f35241523fbab1": # WETH
+    # Fallback 3: CoinGecko (ETH only, lazy fetch)
+    if addr == cfg("network", "weth").lower():
         price = _get_coingecko_eth_price()
         if price > 0:
             _price_cache[addr] = price
@@ -151,10 +146,8 @@ def estimate_profit_usd(position: dict) -> dict:
     debt_price  = get_token_price_usd(debt_addr)
     col_price   = get_token_price_usd(col_addr)
 
-    if debt_price == 0 or col_price == 0:
-        # Fall back to Aave's reported base unit values
-        debt_price = 1.0
-        col_price  = 1.0
+    if debt_price <= 0 or col_price <= 0:
+        return {"profitable": False, "reason": "Missing live price data"}
 
     position["debt_price"] = debt_price
     position["col_price"]  = col_price
@@ -173,12 +166,9 @@ def estimate_profit_usd(position: dict) -> dict:
     # Gas estimate (Arbitrum L2 + approximate L1 calldata fee)
     gas_limit       = cfg("gas", "gas_limit")
     max_fee_gwei    = cfg("gas", "max_fee_per_gas_gwei")
-    eth_price       = get_token_price_usd("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1")
-    if eth_price == 0:
-        try:
-            eth_price = cfg("oracle", "fallback_eth_price") or 3000.0
-        except KeyError:
-            eth_price = 3000.0
+    eth_price       = get_token_price_usd(cfg("network", "weth"))
+    if eth_price <= 0:
+        return {"profitable": False, "reason": "ETH price unavailable for gas estimation"}
 
     # L2 Execution cost
     l2_gas_cost_eth = (gas_limit * max_fee_gwei * 1e9) / 1e18
