@@ -203,11 +203,11 @@ def save_categorized_position(pos: Dict[str, Any]):
         category = "critical"
         pos["is_zombie"] = False
         critical_store.upsert(pos)
-    elif hf < 1.05:
+    elif 1.0 <= hf < 1.05:
         category = "zombie"
         pos["is_zombie"] = True
         zombies_store.upsert(pos)
-    elif hf < 1.15:
+    elif 1.05 <= hf < 1.15:
         category = "watching"
         pos["is_zombie"] = False
         watching_store.upsert(pos)

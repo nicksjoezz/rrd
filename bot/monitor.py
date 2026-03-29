@@ -234,7 +234,10 @@ class ProtocolMonitor:
             total_debt_base = data[1]
             hf_raw          = data[5]
 
-            if total_debt_base == 0: return None
+            if total_debt_base == 0:
+                # Cleanup if it was previously recorded
+                remove_position(self.name, user)
+                return None
 
             # ── Real-Time Edge ──────────────────────────────────────────
             hf = health_factor_float(hf_raw)
@@ -356,7 +359,7 @@ class ProtocolMonitor:
                     pos = self.check_position(user)
                     if pos:
                         upsert_position(pos)
-                        if hf <= 1.0: liquidatable.append(pos)
+                        if pos.get("health_factor", 2.0) <= 1.0: liquidatable.append(pos)
 
         return liquidatable
 
@@ -480,24 +483,18 @@ class MultiProtocolMonitor:
 
         # 3. Cleanup stale positions from JSON files
         # A position is stale if it's NOT in the current scan results (meaning HF > 1.15 or debt = 0)
-        # We'll use a set of currently "active" (at-risk) keys
-        active_keys = set()
-        # We can't easily get all active from the monitors without re-scanning
-        # So we'll rely on the fact that if a position is in zombie_queue, it's active.
-        # But we also have "Watching" which might be up to 1.15.
-
-        # Let's collect all positions returned by check_position in this cycle.
-        # Actually, scan_all already calls upsert_position for everything it finds.
-
-        # To truly clean up, we should check which positions in the JSON stores
-        # WERE NOT updated in this cycle.
         from .persistence import critical_store, zombies_store, watching_store
         now = time.time()
+        # We use a longer timeout for cleanup to avoid flickering if a scan takes longer or fails once
+        # Default interval is often 30-60s. 300s (5m) is a safe "stale" threshold.
+        stale_threshold = max(300, cfg("scanning", "main_loop_interval_seconds") * 3)
+
         for store in [critical_store, zombies_store, watching_store]:
             stored_items = store.get_all_list()
             for item in stored_items:
-                # If not updated in the last 2 cycles (interval * 2), remove it
-                if now - item.get("last_updated", 0) > (cfg("scanning", "main_loop_interval_seconds") * 2.5):
+                if now - item.get("last_updated", 0) > stale_threshold:
+                    logger.info(f"[CLEANUP] Removing stale position {item.get('address','?')[:8]} "
+                                f"from {item.get('protocol','?')} (last updated {int(now - item.get('last_updated',0))}s ago)")
                     remove_position(item['protocol'], item['address'])
 
         # 4. Ready to fire

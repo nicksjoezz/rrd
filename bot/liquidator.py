@@ -107,6 +107,17 @@ class LiquidationExecutor:
                 try: path = bytes.fromhex(path)
                 except: pass
 
+            logger.info(
+                f"[EXECUTE] MultiHop Parameters:\n"
+                f"  debtToken:        {debt_token}\n"
+                f"  collateralToken:  {col_token}\n"
+                f"  borrower:         {position['user']}\n"
+                f"  debtAmount:       {debt_amount}\n"
+                f"  lendingPool:      {pool_address}\n"
+                f"  swapPath:         {path.hex() if isinstance(path, bytes) else path}\n"
+                f"  minProfit (wei):  {min_profit_wei}"
+            )
+
             return self._contract.functions.executeLiquidationMultiHop(
                 checksum(debt_token),
                 checksum(col_token),
@@ -122,6 +133,16 @@ class LiquidationExecutor:
                 **gas_params,
             })
         else:
+            logger.info(
+                f"[EXECUTE] SingleHop Parameters:\n"
+                f"  debtToken:        {debt_token}\n"
+                f"  collateralToken:  {col_token}\n"
+                f"  borrower:         {position['user']}\n"
+                f"  debtAmount:       {debt_amount}\n"
+                f"  lendingPool:      {pool_address}\n"
+                f"  swapFee:          {swap_fee}\n"
+                f"  minProfit (wei):  {min_profit_wei}"
+            )
             return self._contract.functions.executeLiquidation(
                 checksum(debt_token),
                 checksum(col_token),

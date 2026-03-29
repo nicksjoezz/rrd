@@ -4,6 +4,7 @@ Accounts for: flash loan fee, swap slippage, gas cost, liquidation bonus
 """
 
 import logging
+import time
 import requests
 from typing import Optional
 from web3 import Web3
@@ -82,6 +83,7 @@ def get_token_price_usd(token_address: str) -> float:
                 )
                 data  = feed.functions.latestRoundData().call()
                 price = data[1] / 1e8  # Chainlink uses 8 decimals
+                logger.info(f"[PRICE] Chainlink: {sym} = ${price:,.2f}")
                 _price_cache[addr] = price
                 _price_cache_block = current_block
                 return price
@@ -97,6 +99,8 @@ def get_token_price_usd(token_address: str) -> float:
             # Aave reports in 8 decimals for USD base
             price = oracle.functions.getAssetPrice(checksum(token_address)).call() / 1e8
             if price > 0:
+                sym = get_token_map().get(addr, {}).get("symbol", addr[:10])
+                logger.info(f"[PRICE] Aave Oracle: {sym} = ${price:,.2f}")
                 _price_cache[addr] = price
                 _price_cache_block = current_block
                 return price
@@ -106,6 +110,7 @@ def get_token_price_usd(token_address: str) -> float:
     if addr == cfg("network", "weth").lower():
         price = _get_coingecko_eth_price()
         if price > 0:
+            logger.info(f"[PRICE] CoinGecko: ETH = ${price:,.2f}")
             _price_cache[addr] = price
             _price_cache_block = current_block
             return price
