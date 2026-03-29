@@ -20,6 +20,9 @@ _price_cache: dict = {}
 _price_cache_block: int = 0
 _aave_oracle_addr: Optional[str] = None
 
+_cg_eth_cache: float = 0.0
+_cg_eth_time: float = 0.0
+
 def _get_aave_oracle() -> Optional[str]:
     global _aave_oracle_addr
     if _aave_oracle_addr: return _aave_oracle_addr
@@ -33,11 +36,20 @@ def _get_aave_oracle() -> Optional[str]:
     except Exception: return None
 
 def _get_coingecko_eth_price() -> float:
-    """Final fallback for ETH price."""
+    """Final fallback for ETH price (with 60s cache)."""
+    global _cg_eth_cache, _cg_eth_time
+    now = time.time()
+    if now - _cg_eth_time < 60 and _cg_eth_cache > 0:
+        return _cg_eth_cache
+
     try:
         r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd", timeout=5)
-        return float(r.json()["ethereum"]["usd"])
-    except Exception: return 0.0
+        price = float(r.json()["ethereum"]["usd"])
+        if price > 0:
+            _cg_eth_cache = price
+            _cg_eth_time = now
+        return price
+    except Exception: return _cg_eth_cache
 
 def get_token_price_usd(token_address: str) -> float:
     """

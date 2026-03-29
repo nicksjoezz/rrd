@@ -520,3 +520,5 @@
 2026-03-28 22:27:31 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
 2026-03-28 22:28:35 [INFO] liquidation_bot.zombie: [ZOMBIE] Initialized with 1 positions from zombies.json
 2026-03-28 22:28:35 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
+2026-03-29 05:58:21 [INFO] liquidation_bot: Bot not auto-started: --no-bot flag
+2026-03-29 05:58:21 [INFO] liquidation_bot.zombie: [ZOMBIE] Initialized with 1 positions from zombies.json

@@ -76,25 +76,13 @@ def get_stats() -> dict:
     total_borrowers = get_all_borrower_count()
     stats = p.history.get_stats(total_borrowers)
 
-    # Add counts for dashboard/positions
-    all_pos = p.positions.get_all_positions()
+    # Add counts for dashboard/positions using the unified merging logic
+    from main import get_merged_positions
+    all_merged = get_merged_positions()
 
-    # Merge with zombies for accurate stats
-    from .zombie_queue import get_zombie_queue
-    from .utils import load_config
-    zq = get_zombie_queue(
-        entry_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("entry_hf", 1.05)),
-        fire_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("fire_hf", 1.0))
-    )
-    zombies = zq.get_watching()
-    z_addrs = {z['user'].lower() for z in zombies}
-
-    stats["zombie_count"] = len(zombies)
-    stats["crit_count"]   = len([p for p in all_pos if p.get("health_factor", 9.9) < 1.0])
-    stats["warn_count"]   = len([p for p in all_pos if 1.0 <= p.get("health_factor", 9.9) < 1.05])
-
-    # Ensure zombies that are also in positions aren't double counted if we were doing total tracked
-    # but for now we just want the counts for the boxes
+    stats["zombie_count"] = len([p for p in all_merged if p.get("is_zombie")])
+    stats["crit_count"]   = len([p for p in all_merged if p.get("health_factor", 9.9) < 1.0])
+    stats["warn_count"]   = len([p for p in all_merged if 1.0 <= p.get("health_factor", 9.9) < 1.05])
 
     return stats
 

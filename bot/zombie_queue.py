@@ -48,29 +48,27 @@ class ZombieQueue:
 
     def _load(self):
         """Load queue from disk on startup."""
+        first_load = not hasattr(ZombieQueue, '_already_logged_load')
+        if first_load:
+            ZombieQueue._already_logged_load = True
+
         if not os.path.exists(self.filename):
-            # Create empty if not exists to avoid repetitive "not found" checks
             self._queue = {}
             return
+
         try:
             with open(self.filename, 'r') as f:
                 data = json.load(f)
             
-            # Convert "hex:..." back to bytes
             def _decode_hex(obj):
-                if isinstance(obj, dict):
-                    return {k: _decode_hex(v) for k, v in obj.items()}
-                if isinstance(obj, list):
-                    return [_decode_hex(x) for x in obj]
-                if isinstance(obj, str) and obj.startswith("hex:"):
-                    return bytes.fromhex(obj[4:])
+                if isinstance(obj, dict): return {k: _decode_hex(v) for k, v in obj.items()}
+                if isinstance(obj, list): return [_decode_hex(x) for x in obj]
+                if isinstance(obj, str) and obj.startswith("hex:"): return bytes.fromhex(obj[4:])
                 return obj
 
             self._queue = _decode_hex(data)
-            # Use a class-level variable or just a global to only log this once
-            if not hasattr(ZombieQueue, '_already_logged_load'):
+            if first_load and self._queue:
                 logger.info(f"[ZOMBIE] Initialized with {len(self._queue)} positions from {self.filename}")
-                ZombieQueue._already_logged_load = True
         except Exception as e:
             logger.error(f"[ZOMBIE] Failed to load {self.filename}: {e}")
 
