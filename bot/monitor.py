@@ -243,8 +243,8 @@ class ProtocolMonitor:
             hf = health_factor_float(hf_raw)
             best_info = None
 
-            # Watch everything up to 1.15
-            if hf < 1.3:
+            # Only do expensive fresh check if truly near liquidation
+            if hf < 1.1:
                 best_info = self._get_best_tokens_and_fresh_hf(user)
                 if best_info: hf = best_info["fresh_hf"]
 

@@ -19,6 +19,8 @@ logger = logging.getLogger("liquidation_bot.profit")
 # Cache prices to avoid hammering RPC
 _price_cache: dict = {}
 _price_cache_block: int = 0
+_last_eth_block_fetch: float = 0
+_cached_eth_block: int = 0
 _aave_oracle_addr: Optional[str] = None
 
 _cg_eth_cache: float = 0.0
@@ -61,8 +63,18 @@ def get_token_price_usd(token_address: str) -> float:
     w3   = get_web3()
     addr = token_address.lower()
 
+    # Throttle eth_blockNumber to avoid spamming RPC
+    global _cached_eth_block, _last_eth_block_fetch
+    now = time.time()
+    if now - _last_eth_block_fetch > 2: # 2s TTL for block number cache
+        try:
+            _cached_eth_block = w3.eth.block_number
+            _last_eth_block_fetch = now
+        except Exception:
+            pass
+
     # Use cached prices if same block
-    current_block = w3.eth.block_number
+    current_block = _cached_eth_block
     global _price_cache, _price_cache_block
     if current_block == _price_cache_block and addr in _price_cache:
         return _price_cache[addr]

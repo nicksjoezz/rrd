@@ -141,6 +141,11 @@ def get_best_swap(
 
         if best_out == 0:
             logger.warning(f"No swap quote found for {token_in[:8]}->{token_out[:8]}")
+            # Ensure we return valid (empty) params instead of breaking upstream
+            return 0, "single", {
+                "route": "single", "fee": fee_direct,
+                "token_in": token_in, "token_out": token_out
+            }
 
         return best_out, best_route, best_params
 
