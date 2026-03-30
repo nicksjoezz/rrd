@@ -49,11 +49,17 @@ contract FlashLoanLiquidator {
 
     event LiquidationExecuted(address indexed borrower, address collateral,
         address debtToken, uint256 debtCovered, uint256 profit);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event Paused(address account);
+    event Unpaused(address account);
 
     modifier onlyOwner()  { require(msg.sender == owner, "Not owner"); _; }
     modifier notPaused()  { require(!paused, "Paused"); _; }
 
-    constructor() { owner = msg.sender; }
+    constructor() {
+        owner = msg.sender;
+        emit OwnershipTransferred(address(0), msg.sender);
+    }
 
     // ── Single-hop (ETH/BTC/stablecoin collateral) ────────────────────────────
     function executeLiquidation(
@@ -128,8 +134,11 @@ contract FlashLoanLiquidator {
         IERC20(debtToken).transfer(address(BALANCER), repayAmount);
 
         // 5. Profit stays — owner calls withdraw()
-        uint256 profit = IERC20(debtToken).balanceOf(address(this));
-        emit LiquidationExecuted(borrower, collateralToken, debtToken, debtAmount, profit);
+        uint256 balanceAfter = IERC20(debtToken).balanceOf(address(this));
+        // Safety check to ensure we didn't lose funds (though Balancer check would fail anyway)
+        require(balanceAfter >= minProfit, "minProfit not met");
+
+        emit LiquidationExecuted(borrower, collateralToken, debtToken, debtAmount, balanceAfter);
     }
 
     // ── Admin ─────────────────────────────────────────────────────────────────
@@ -141,9 +150,14 @@ contract FlashLoanLiquidator {
     function withdrawETH() external onlyOwner {
         payable(owner).transfer(address(this).balance);
     }
-    function setPaused(bool _p) external onlyOwner { paused = _p; }
+    function setPaused(bool _p) external onlyOwner {
+        paused = _p;
+        if (_p) emit Paused(msg.sender);
+        else emit Unpaused(msg.sender);
+    }
     function transferOwnership(address newOwner) external onlyOwner {
         require(newOwner != address(0), "Zero addr");
+        emit OwnershipTransferred(owner, newOwner);
         owner = newOwner;
     }
     receive() external payable {}
