@@ -2,7 +2,7 @@
   "network": {
     "rpc_http": "https://arb1.arbitrum.io/rpc",
     "rpc_ws": "wss://arb1.arbitrum.io/ws",
-    "alchemy_key": "9fVR5rZUC-g2L5zbeywTA",
+    "alchemy_key": "g0Mank73kn2CRetJh7emu",
     "chain_id": 42161,
     "chain_name": "Arbitrum One",
     "weth": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
@@ -11,7 +11,7 @@
   },
   "wallet": {
     "private_key": "YOUR_PRIVATE_KEY_HERE",
-    "liquidator_contract": "DEPLOY_CONTRACT_ADDRESS_HERE"
+    "liquidator_contract": "0xd507fe34DCD797431fb93e989CeCAAd98F8dBeAc"
   },
   "protocols": {
     "aave_v3": {
