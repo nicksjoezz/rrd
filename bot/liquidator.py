@@ -348,7 +348,10 @@ class LiquidationExecutor:
                 if fresh_hf > 1.0 and mode == "live":
                     # In simulate mode we still might want to see it,
                     # but in live we MUST skip if HF > 1.0
-                    logger.info(f"[{protocol}] Skipping {user[:8]}... Position recovered (HF={fresh_hf:.4f})")
+                    logger.info(
+                        f"[{protocol}] Skipping {user[:8]}... Position healthy on-chain. "
+                        f"Discovery HF: {position.get('health_factor',0):.4f} | Fresh On-chain HF: {fresh_hf:.4f}"
+                    )
                     return None
 
                 # Update position object with latest on-chain data

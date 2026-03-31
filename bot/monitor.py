@@ -212,28 +212,40 @@ class ProtocolMonitor:
                 sym = get_token_map().get(addr_l, {}).get("symbol", addr[:10])
 
                 if col_bal > 0:
-                    usd_val = (col_bal / 10**decimals) * price
-                    if price == 0:
-                        # Safety: If price discovery fails, do not proceed with 0.0000 HF
-                        return None
-                    total_fresh_weighted_col += usd_val * config["threshold"]
-                    score = usd_val * (1 + config["bonus"]) if cfg("strategy", "prioritize_high_bonus") else usd_val
+                    if price > 0:
+                        usd_val = (col_bal / 10**decimals) * price
+                        total_fresh_weighted_col += usd_val * config["threshold"]
+                        score = usd_val * (1 + config["bonus"]) if cfg("strategy", "prioritize_high_bonus") else usd_val
+                    else:
+                        # We don't have a price, but we still need to pick a collateral
+                        # Score it as 1 to avoid crash but indicate presence
+                        score = 1
+
                     if score > best_col_score:
                         best_col_score = score
                         best_col = (addr, sym, config["bonus"])
 
                 if debt_bal > 0:
-                    usd_val = (debt_bal / 10**decimals) * price
-                    if price == 0:
-                        # Safety: If price discovery fails, do not proceed with 0.0000 HF
-                        return None
-                    total_fresh_debt += usd_val
-                    if usd_val > best_debt_score:
-                        best_debt_score = usd_val
+                    if price > 0:
+                        usd_val = (debt_bal / 10**decimals) * price
+                        total_fresh_debt += usd_val
+                        score = usd_val
+                    else:
+                        score = 1
+
+                    if score > best_debt_score:
+                        best_debt_score = score
                         best_debt = (addr, sym, debt_bal)
             except Exception: continue
 
         if not best_col or not best_debt or total_fresh_debt == 0:
+            # If we don't have enough data for a fresh HF, return tokens but no HF
+            if best_col and best_debt:
+                 return {
+                    "fresh_hf": None,
+                    "col_token": best_col[0], "col_symbol": best_col[1], "col_bonus": best_col[2],
+                    "debt_token": best_debt[0], "debt_symbol": best_debt[1], "debt_raw": best_debt[2]
+                }
             return None
 
         fresh_hf = total_fresh_weighted_col / total_fresh_debt
@@ -264,13 +276,15 @@ class ProtocolMonitor:
                 return None
 
             # ── Real-Time Edge ──────────────────────────────────────────
-            hf = health_factor_float(hf_raw)
+            hf_onchain = health_factor_float(hf_raw)
+            hf = hf_onchain
             best_info = None
 
             # Only do expensive fresh check if truly near liquidation
             if hf < 1.1:
                 best_info = self._get_best_tokens_and_fresh_hf(user)
-                if best_info: hf = best_info["fresh_hf"]
+                if best_info and best_info["fresh_hf"] is not None:
+                    hf = best_info["fresh_hf"]
 
             col_usd    = wei_to_usd_base(total_col_base)
             debt_usd   = wei_to_usd_base(total_debt_base)
@@ -279,7 +293,7 @@ class ProtocolMonitor:
 
             if debt_usd < min_debt or debt_usd > max_debt: return None
 
-            if hf > 1.15: return None
+            if hf > 1.15 and hf_onchain > 1.15: return None
 
             if not best_info:
                 best_info = self._get_best_tokens_and_fresh_hf(user)
@@ -311,6 +325,7 @@ class ProtocolMonitor:
                 "debt_symbol":       debt_symbol,
                 "debt_to_cover":     debt_to_cover,
                 "health_factor":     hf,
+                "health_factor_onchain": hf_onchain,
                 "total_debt_usd":    debt_usd,
                 "total_col_usd":     col_usd,
                 "pool_address":      self.pool_addr,
@@ -373,7 +388,7 @@ class ProtocolMonitor:
                             result = zombie_queue.update(self.name, user, pos)
                             if result == "fire":
                                 liquidatable.append(pos)
-                        elif hf <= 1.0:
+                        elif hf <= 1.0 or pos.get("health_factor_onchain", 2.0) <= 1.0:
                             liquidatable.append(pos)
                             
             except Exception as e:
