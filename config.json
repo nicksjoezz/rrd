@@ -11,7 +11,7 @@
   },
   "wallet": {
     "private_key": "YOUR_PRIVATE_KEY_HERE",
-    "liquidator_contract": "0xd507fe34DCD797431fb93e989CeCAAd98F8dBeAc"
+    "liquidator_contract": "DEPLOY_CONTRACT_ADDRESS_HERE"
   },
   "protocols": {
     "aave_v3": {
@@ -146,9 +146,9 @@
   },
   "scanning": {
     "main_loop_interval_seconds": 20,
-    "blocks_to_scan_for_borrowers": 1728000,
-    "batch_size": 100,
-    "event_scan_chunk": 50000,
+    "blocks_to_scan_for_borrowers": 5000,
+    "batch_size": 500,
+    "event_scan_chunk": 10,
     "use_websocket": false,
     "_note_arbitrum_blocks": "Arbitrum = ~4 blocks/sec. 1 day = 345600 blocks. 50 days = 17280000."
   },

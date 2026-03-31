@@ -98,7 +98,7 @@ class ProtocolMonitor:
         """
         Scan Borrow event logs using raw eth_getLogs — NOT the web3 event helper.
         """
-        w3    = get_public_web3()
+        w3    = get_web3()
         chunk = cfg("scanning", "event_scan_chunk")
         # Use protocol-specific topic0
         new_borrowers = set()
@@ -108,8 +108,9 @@ class ProtocolMonitor:
 
         for i, start in enumerate(range(from_block, to_block, chunk), 1):
             end = min(start + chunk - 1, to_block)
+            time.sleep(0.1) # Throttle
             try:
-                if i % 50 == 0 or i == 1 or i == total_reqs:
+                if i % 10 == 0 or i == 1 or i == total_reqs:
                     pct = (i / total_reqs) * 100
                     logger.info(f"[{self.name}] Progress: {pct:.1f}%  |  Borrowers found: {len(new_borrowers)}")
 
@@ -119,6 +120,8 @@ class ProtocolMonitor:
                     "fromBlock": start,
                     "toBlock":   end,
                 })
+                if logs:
+                    logger.debug(f"[{self.name}] Found {len(logs)} logs in chunk {start}-{end}")
                 batch_found = []
                 for log in logs:
                     topics = log.get("topics", [])
@@ -353,6 +356,7 @@ class ProtocolMonitor:
         mc = w3.eth.contract(address=MULTICALL3_ADDR, abi=MULTICALL3_ABI)
         
         batch_size = cfg("scanning", "batch_size") or 500
+        logger.debug(f"[{self.name}] Scanning {len(users)} users (batch size: {batch_size})")
 
         for i in range(0, len(users), batch_size):
             chunk = users[i : i + batch_size]
@@ -364,6 +368,7 @@ class ProtocolMonitor:
             
             try:
                 _, return_data = mc.functions.aggregate(calls).call()
+                logger.debug(f"[{self.name}] Batch {i//batch_size + 1}: Received {len(return_data)} results")
                 
                 for j, raw_res in enumerate(return_data):
                     user = chunk[j]
@@ -460,20 +465,15 @@ class MultiProtocolMonitor:
         w3            = get_web3()
         current_block = w3.eth.block_number
 
+        ARBITRUM_SCAN_WINDOW = cfg("scanning", "blocks_to_scan_for_borrowers")
+
         for name, monitor in self.monitors.items():
             monitor.load_borrowers_from_db()
-            last_block = get_last_scan_block(name)
-            ARBITRUM_50_DAYS = 17_280_000
-
-            if last_block == 0:
-                from_block = max(0, current_block - ARBITRUM_50_DAYS)
-            else:
-                from_block = last_block + 1
 
         for name, monitor in self.monitors.items():
             last_block = get_last_scan_block(name)
             if last_block == 0:
-                from_block = max(0, current_block - ARBITRUM_50_DAYS)
+                from_block = max(0, current_block - ARBITRUM_SCAN_WINDOW)
             else:
                 from_block = last_block + 1
             
