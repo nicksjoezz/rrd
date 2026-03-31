@@ -3,6 +3,10 @@
     "rpc_http": "https://arb1.arbitrum.io/rpc",
     "rpc_ws": "wss://arb1.arbitrum.io/ws",
     "alchemy_key": "9fVR5rZUC-g2L5zbeywTA",
+    "alchemy_keys": [
+      "9fVR5rZUC-g2L5zbeywTA",
+      "YOUR_SECOND_ALCHEMY_KEY_HERE"
+    ],
     "chain_id": 42161,
     "chain_name": "Arbitrum One",
     "weth": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",

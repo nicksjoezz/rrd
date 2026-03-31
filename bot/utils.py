@@ -86,61 +86,64 @@ _current_key_idx: int = 0
 _rpc_lock = threading.RLock()
 
 def get_alchemy_web3() -> Web3:
+    """Provides a thread-safe Web3 instance with rotation across multiple Alchemy keys."""
     global _alchemy_w3, _alchemy_keys, _current_key_idx
 
     with _rpc_lock:
-        if _alchemy_w3 is not None and _alchemy_w3.is_connected():
-            return _alchemy_w3
+        # Check if current connection is still healthy
+        if _alchemy_w3 is not None:
+            try:
+                if _alchemy_w3.is_connected():
+                    return _alchemy_w3
+            except Exception:
+                pass
 
         config = load_config()
-        keys = config["network"].get("alchemy_keys") or [config["network"].get("alchemy_key", "")]
-        _alchemy_keys = [k for k in keys if k and k != "YOUR_ALCHEMY_KEY_HERE"]
+        raw_keys = config["network"].get("alchemy_keys") or [config["network"].get("alchemy_key", "")]
+        _alchemy_keys = [k for k in raw_keys if k and "YOUR_" not in k]
 
         if not _alchemy_keys:
-            logger.warning("No Alchemy keys provided - using public RPC as last resort")
+            logger.warning("No valid Alchemy keys found - using public RPC as last resort")
             return get_public_web3()
 
-        # Rotate key
-        _current_key_idx = (_current_key_idx + 1) % len(_alchemy_keys)
-        key = _alchemy_keys[_current_key_idx]
-        
-        if key.startswith("http"):
-            rpc = key
-        else:
-            rpc = f"https://arb-mainnet.g.alchemy.com/v2/{key}"
-            
-        try:
-            from requests.adapters import HTTPAdapter
-            from urllib3.util.retry import Retry
-            import requests
+        # Iterate through keys to find a working one
+        initial_idx = _current_key_idx
+        while True:
+            key = _alchemy_keys[_current_key_idx]
+            rpc = key if key.startswith("http") else f"https://arb-mainnet.g.alchemy.com/v2/{key}"
 
-            # Setup robust retry strategy for 429/5xx errors
-            retry_strategy = Retry(
-                total=5,
-                backoff_factor=1,
-                status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=["POST", "GET"]
-            )
-            adapter = HTTPAdapter(max_retries=retry_strategy)
-            session = requests.Session()
-            session.mount("https://", adapter)
-            session.mount("http://", adapter)
+            try:
+                from requests.adapters import HTTPAdapter
+                from urllib3.util.retry import Retry
+                import requests
 
-            _alchemy_w3 = Web3(Web3.HTTPProvider(rpc, session=session, request_kwargs={"timeout": 30}))
+                # Robust retry strategy for 429/5xx errors
+                retry_strategy = Retry(
+                    total=3,
+                    backoff_factor=0.5,
+                    status_forcelist=[429, 500, 502, 503, 504],
+                )
+                adapter = HTTPAdapter(max_retries=retry_strategy)
+                session = requests.Session()
+                session.mount("https://", adapter)
+                session.mount("http://", adapter)
 
-            if not _alchemy_w3.is_connected():
-                logger.error(f"CRITICAL: Alchemy RPC connection failed for key {key[:8]}... ")
-                # Try next key
-                if len(_alchemy_keys) > (_current_key_idx + 1):
-                    _alchemy_w3 = None
-                    return get_alchemy_web3()
+                _alchemy_w3 = Web3(Web3.HTTPProvider(rpc, session=session, request_kwargs={"timeout": 30}))
 
-                # If all Alchemy keys failed, raise error instead of falling back to public
-                raise ConnectionError(f"All Alchemy RPC keys failed. Cannot continue.")
-        except Exception as e:
-            logger.error(f"Alchemy connection error: {e}")
-            raise e
-    return _alchemy_w3
+                if _alchemy_w3.is_connected():
+                    logger.debug(f"Connected to Alchemy RPC (Key: {key[:8]}...)")
+                    return _alchemy_w3
+                else:
+                    logger.error(f"Alchemy RPC connection failed for key {key[:8]}...")
+            except Exception as e:
+                logger.error(f"Alchemy key {key[:8]}... error: {e}")
+
+            # Try next key
+            _current_key_idx = (_current_key_idx + 1) % len(_alchemy_keys)
+            if _current_key_idx == initial_idx:
+                # We've tried all keys and none worked
+                logger.error("All Alchemy RPC keys failed. Cannot continue.")
+                raise ConnectionError("No working Alchemy RPC keys available.")
 
 def get_web3() -> Web3:
     """General connection — prefers Alchemy but stable."""
