@@ -68,11 +68,11 @@ def main():
     with open("competitors.json", "r") as f:
         comps = json.load(f)
 
-    top_5_addrs = [c['address'].lower() for c in comps[:5]]
+    top_5_addrs = [Web3.to_checksum_address(c['address']) for c in comps[:5]]
     print(f"Analyzing Top 5 Competitors: {top_5_addrs}")
 
     latest = w3.eth.block_number
-    lookback = 5000000 # ~15 days
+    lookback = 3000000 # Increase window
     start_block = latest - lookback
 
     print(f"Scanning {lookback:,} blocks...")
@@ -86,20 +86,29 @@ def main():
 
     print(f"Found {len(all_logs)} total liquidations. Filtering for top 5...")
 
-    analysis = {addr: {"count": 0, "gas_spent": 0, "targets": {}, "flash_loans": {}, "architectures": {}} for addr in top_5_addrs}
+    analysis = {addr.lower(): {"count": 0, "gas_spent": 0, "targets": {}, "flash_loans": {}, "architectures": {}} for addr in top_5_addrs}
 
     def process_log(log):
         tx_hash = log['transactionHash']
+        tx_hex = tx_hash.hex() if isinstance(tx_hash, bytes) else tx_hash
         try:
             tx = w3.eth.get_transaction(tx_hash)
             receipt = w3.eth.get_transaction_receipt(tx_hash)
 
-            sender = tx['from'].lower()
-            to = (tx['to'] or "").lower()
+            sender = tx['from']
+            to = tx['to'] or ""
+
+            # Debug: see what's happening
+            # print(f"Found Liq in {tx_hex} | From: {sender} | To: {to}")
 
             match = None
-            if sender in top_5_addrs: match = sender
-            elif to in top_5_addrs: match = to
+            for target in top_5_addrs:
+                if sender.lower() == target.lower():
+                    match = target.lower()
+                    break
+                if to.lower() == target.lower():
+                    match = target.lower()
+                    break
 
             if match:
                 decoded = decode_liq_log(log)
@@ -136,7 +145,8 @@ def main():
     print("\n" + "="*60)
     print("COMPETITOR DEEP ANALYSIS (15 DAYS)")
     print("="*60)
-    for addr in top_5_addrs:
+    for addr_orig in top_5_addrs:
+        addr = addr_orig.lower()
         data = analysis[addr]
         if data['count'] == 0: continue
         avg_gas = data['gas_spent'] / data['count']

@@ -35,9 +35,8 @@ REVERT_MAP = {
 }
 
 # Aave V3 LiquidationCall event topic (for rival checks)
-LIQUIDATION_TOPIC = Web3.keccak(
-    text="LiquidationCall(address,address,address,uint256,uint256,address,bool)"
-).hex()
+# Signature: LiquidationCall(address,address,address,uint256,uint256,address,bool)
+LIQUIDATION_TOPIC = "0xe413a321e8681d831f4dbccbca790d2952b56f977908e45be37335533e005286"
 
 def _current_mode() -> str:
     """Read mode fresh from config each call so Settings changes take effect instantly."""
