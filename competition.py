@@ -1,110 +1,80 @@
-"""
-competition.py -- Tool to find liquidation bot competitors by scanning Aave V3 events.
-Optimized for Alchemy Free Tier (10 block range limit).
-"""
-
 import json
 import time
-import sys
-from pathlib import Path
-from web3 import Web3
 import requests
+from web3 import Web3
+from concurrent.futures import ThreadPoolExecutor
 
-# Add project root to path
-ROOT = Path(__file__).parent
-sys.path.insert(0, str(ROOT))
+RPC_URL = "https://arb1.arbitrum.io/rpc"
+POOL = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+TOPIC = "0xe413a321e8681d831f4dbccbca790d2952b56f977908e45be37335533e005286"
 
-from bot.utils import load_config, get_web3, logger
-
-def find_competitors(lookback_blocks=1000):
-    config = load_config()
-    # Use the RPC URL from config
-    rpc_url = config['network']['rpc_http']
-    if "alchemy" in rpc_url and "9fVR5rZUC-g2L5zbeywTA" not in rpc_url:
-        # Use the key from config if available
-        pass
-
-    w3 = Web3(Web3.HTTPProvider(rpc_url))
-
-    AAVE_V3_POOL = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
-    LIQUIDATION_TOPIC = "0xe410921a33261a758b54010964644061ad574acc3676d093da59f3cb2949640f"
-
+def get_logs_large_chunk(start, end):
+    payload = {
+        "jsonrpc": "2.0", "id": 1, "method": "eth_getLogs",
+        "params": [{
+            "address": POOL,
+            "fromBlock": hex(start), "toBlock": hex(end),
+            "topics": [TOPIC]
+        }]
+    }
     try:
-        latest_block = w3.eth.block_number
-    except Exception as e:
-        print(f"Error connecting to RPC: {e}")
-        return []
+        r = requests.post(RPC_URL, json=payload, timeout=30)
+        return r.json().get('result', [])
+    except: return []
 
-    from_block = latest_block - lookback_blocks
+def main():
+    w3 = Web3(Web3.HTTPProvider(RPC_URL))
+    try: latest = w3.eth.block_number
+    except: return
 
-    print(f"Scanning last {lookback_blocks} blocks ({from_block} to {latest_block}) for competitors...")
+    # 15 days is ~5.2M blocks. Let's scan 5M.
+    lookback = 5000000
+    start_block = latest - lookback
 
-    # Alchemy Free tier limits eth_getLogs to 10 blocks
-    chunk_size = 10
-    logs = []
+    print(f"Scanning {lookback:,} blocks for competitors (past ~15 days)...")
 
-    # Track competitors
+    # Use 200k chunks for public RPC
+    chunk_size = 200000
+    chunks = [(i, min(i+chunk_size-1, latest)) for i in range(start_block, latest, chunk_size)]
+
+    all_logs = []
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(lambda x: get_logs_large_chunk(x[0], x[1]), chunks))
+        for res in results:
+            if isinstance(res, list): all_logs.extend(res)
+
+    print(f"Found {len(all_logs)} liquidation events. Analyzing bots...")
+
     competitors = {}
-
-    for start in range(from_block, latest_block, chunk_size):
-        end = min(start + chunk_size - 1, latest_block)
-
-        # Progress every 100 blocks
-        if (start - from_block) % 100 == 0:
-            print(f"  Progress: {((start - from_block) / lookback_blocks) * 100:.1f}% | Logs found: {len(logs)}")
-
+    # Use another pool to fetch transaction details faster
+    def process_log(log):
         try:
-            chunk_logs = w3.eth.get_logs({
-                "fromBlock": start,
-                "toBlock": end,
-                "address": Web3.to_checksum_address(AAVE_V3_POOL),
-                "topics": [LIQUIDATION_TOPIC]
-            })
+            tx_hash = log['transactionHash']
+            tx = w3.eth.get_transaction(tx_hash)
+            wallet = Web3.to_checksum_address(tx['from'])
+            contract = Web3.to_checksum_address(tx['to'])
+            return [wallet, contract]
+        except: return []
 
-            for log in chunk_logs:
-                logs.append(log)
-                tx_hash = log['transactionHash'].hex()
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        addr_lists = list(executor.map(process_log, all_logs))
+        for addrs in addr_lists:
+            for addr in addrs:
+                if addr.lower() == POOL.lower(): continue
+                competitors[addr] = competitors.get(addr, 0) + 1
 
-                # Fetch transaction details
-                try:
-                    tx = w3.eth.get_transaction(tx_hash)
-                    bot_wallet = tx['from']
-                    bot_contract = tx['to']
-
-                    for addr in [bot_wallet, bot_contract]:
-                        if not addr or addr.lower() == AAVE_V3_POOL.lower():
-                            continue
-
-                        addr = Web3.to_checksum_address(addr)
-                        if addr not in competitors:
-                            competitors[addr] = {
-                                "address": addr,
-                                "count": 0,
-                                "is_contract": (addr == bot_contract and addr != bot_wallet),
-                                "last_tx": tx_hash
-                            }
-                        competitors[addr]["count"] += 1
-                        competitors[addr]["last_tx"] = tx_hash
-                except Exception as e:
-                    print(f"    Error fetching tx {tx_hash}: {e}")
-
-        except Exception as e:
-            # print(f"    Error fetching logs for range {start}-{end}: {e}")
-            time.sleep(0.1) # Brief pause on error
-
-    # Convert to sorted list
-    result_list = sorted(competitors.values(), key=lambda x: x["count"], reverse=True)
+    result = [{"address": k, "count": v} for k, v in sorted(competitors.items(), key=lambda x: x[1], reverse=True)]
 
     # Save to JSON
     with open("competitors.json", "w") as f:
-        json.dump(result_list, f, indent=2)
+        json.dump(result, f, indent=2)
 
-    print(f"\n--- Scan Complete ---")
-    print(f"Found {len(logs)} liquidation events and {len(result_list)} unique bots.")
-    print(f"Results saved to competitors.json")
-
-    return result_list
+    print(f"\n--- COMPETITION DATA (15 DAYS) ---")
+    print(f"Total Unique Bots Found: {len(result)}")
+    if result:
+        print("Top 10 Bots:")
+        for r in result[:10]:
+            print(f"  {r['address']} - {r['count']} liquidations")
 
 if __name__ == "__main__":
-    # Scan a larger range to actually find some competitors
-    find_competitors(10000)
+    main()
