@@ -186,15 +186,24 @@ class ProtocolMonitor:
         except Exception:
             reserves_list = []
 
+        # -- Safety Check: Does the user have assets we DON'T know about? --
+        # If so, our local HF calculation will be wrong (too low), leading to HF=0.0000 bugs.
+        known_addresses = {info["address"].lower() for info in cfg("tokens").values()}
+        for i, res_addr in enumerate(reserves_list):
+            is_using = (config_bits >> (i * 2)) & 3
+            if is_using and res_addr.lower() not in known_addresses:
+                # User has an asset (collateral or debt) not in our config.
+                # Abort local calculation to avoid false positives.
+                return None
+
         tokens = cfg("tokens")
         for sym, info in tokens.items():
             addr = info["address"]
             addr_l = addr.lower()
 
-            # Check bitmask if possible
+            # Check bitmask
             if reserves_list and addr_l in [a.lower() for a in reserves_list]:
                 idx = [a.lower() for a in reserves_list].index(addr_l)
-                # Bits are stored as: index 0 is bits 0-1, index 1 is bits 2-3, etc.
                 is_using = (config_bits >> (idx * 2)) & 3
                 if not is_using: continue
 

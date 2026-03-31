@@ -273,7 +273,9 @@ class LiquidationExecutor:
         user     = position["user"]
         try:
             signed  = self._account.sign_transaction(tx)
-            tx_hash = self._w3.eth.send_raw_transaction(signed.raw_transaction)
+            # Use rawTransaction (web3.py v6 attribute)
+            raw_tx  = getattr(signed, "rawTransaction", getattr(signed, "raw_transaction", None))
+            tx_hash = self._w3.eth.send_raw_transaction(raw_tx)
             tx_hex  = tx_hash.hex()
             logger.info(f"[{protocol}] TX sent: {tx_hex}")
 
@@ -342,7 +344,8 @@ class LiquidationExecutor:
                 if fresh_hf > 1.0 and mode == "live":
                     # In simulate mode we still might want to see it,
                     # but in live we MUST skip if HF > 1.0
-                    logger.info(f"[{protocol}] Skipping {user[:8]}... Position recovered (HF={fresh_hf:.4f})")
+                    # Log as DEBUG to avoid noise during mass scans
+                    logger.debug(f"[{protocol}] Skipping {user[:8]}... Position recovered (HF={fresh_hf:.4f})")
                     return None
 
                 # Update position object with latest on-chain data

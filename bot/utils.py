@@ -93,7 +93,24 @@ def get_alchemy_web3() -> Web3:
             rpc = f"https://arb-mainnet.g.alchemy.com/v2/{key}"
             
         try:
-            _alchemy_w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 30}))
+            from requests.adapters import HTTPAdapter
+            from urllib3.util.retry import Retry
+            import requests
+
+            # Setup robust retry strategy for 429/5xx errors
+            retry_strategy = Retry(
+                total=5,
+                backoff_factor=1,
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["POST", "GET"]
+            )
+            adapter = HTTPAdapter(max_retries=retry_strategy)
+            session = requests.Session()
+            session.mount("https://", adapter)
+            session.mount("http://", adapter)
+
+            _alchemy_w3 = Web3(Web3.HTTPProvider(rpc, session=session, request_kwargs={"timeout": 30}))
+
             if not _alchemy_w3.is_connected():
                 logger.warning(f"Alchemy RPC failed (check key: {rpc[:25]}...) -- using Public fallback")
                 return get_public_web3()
