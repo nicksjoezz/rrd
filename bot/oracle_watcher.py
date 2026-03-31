@@ -18,6 +18,8 @@ from .utils import (
     get_web3, cfg, checksum, CHAINLINK_FEED_ABI
 )
 
+import threading
+import asyncio
 logger = logging.getLogger("liquidation_bot.oracle")
 
 
@@ -103,3 +105,29 @@ class OracleWatcher:
     def get_all_prices(self) -> dict:
         """Snapshot of all current prices."""
         return {name: self.get_price(name) for name in self._feeds}
+
+    async def _watch_price_feeds_ws(self, ws_url: str):
+        """
+        Targeted real-time re-check when prices move.
+        Note: Simple price polling is already efficient,
+        but we can listen for new heads to trigger checks.
+        """
+        from web3 import AsyncWeb3
+        try:
+            async with AsyncWeb3(AsyncWeb3.WebSocketProvider(ws_url)) as w3:
+                sub_id = await w3.eth.subscribe("newHeads")
+                logger.info(f"[ORACLE] Price watcher WebSocket active | sub_id={sub_id}")
+                async for head in w3.socket.process_subscriptions():
+                    # Every new block, check price moves
+                    self.check_all_feeds()
+        except Exception as e:
+            logger.debug(f"[ORACLE] WebSocket price watcher error: {e}")
+
+    def start_websocket_watcher(self):
+        ws_url = cfg("network", "rpc_ws")
+        if ws_url and not ws_url.startswith("wss://arb1") and "YOUR" not in ws_url:
+            threading.Thread(
+                target=lambda: asyncio.run(self._watch_price_feeds_ws(ws_url)),
+                daemon=True,
+                name="oracle-ws"
+            ).start()

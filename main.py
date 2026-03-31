@@ -101,6 +101,7 @@ def _bot_loop():
             _emerg.set()
 
         oracle  = OracleWatcher(on_price_drop=on_price_drop)
+        oracle.start_websocket_watcher()
         mempool = start_mempool_watcher_thread(
             on_oracle_pending=lambda ev: (
                 logger.info(f"Pending oracle update: {ev['feed_name']} -- triggering scan"),

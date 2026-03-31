@@ -400,11 +400,16 @@ class ProtocolMonitor:
                             if result == "fire":
                                 liquidatable.append(pos)
 
-                        # Trigger if EITHER reported OR estimated HF < 1.0
-                        # This exploits oracle lag.
-                        if hf <= 1.0 or (pos.get("estimated_hf") is not None and pos["estimated_hf"] <= 1.0):
+                        # Standardized Architecture Trigger:
+                        # healthFactor < 1.0 -> Liquidatable (Fire immediately)
+                        # healthFactor 1.0 - 1.1 -> At Risk (Watch/Zombie)
+
+                        if hf < 1.0:
                             if pos not in liquidatable:
                                 liquidatable.append(pos)
+                        elif hf <= 1.1:
+                            # Already handled by zombie_queue.update
+                            pass
                             
             except Exception as e:
                 logger.error(f"[{self.name}] Multicall batch error: {e}")
@@ -412,8 +417,7 @@ class ProtocolMonitor:
                     pos = self.check_position(user)
                     if pos:
                         upsert_position(pos)
-                        # Trigger on either
-                        if pos.get("health_factor", 2.0) <= 1.0 or (pos.get("estimated_hf") is not None and pos["estimated_hf"] <= 1.0):
+                        if pos.get("health_factor", 2.0) < 1.0:
                             liquidatable.append(pos)
 
         return liquidatable
@@ -465,14 +469,32 @@ class MultiProtocolMonitor:
         w3            = get_web3()
         current_block = w3.eth.block_number
 
-        ARBITRUM_SCAN_WINDOW = cfg("scanning", "blocks_to_scan_for_borrowers")
-
+        # 1. First, load from local DB cache
         for name, monitor in self.monitors.items():
             monitor.load_borrowers_from_db()
 
+        # 2. For Aave V3, use The Graph for instant discovery
+        if "aave_v3" in self.monitors:
+            from .graph_client import fetch_active_borrowers
+            graph_users = fetch_active_borrowers()
+            if graph_users:
+                self.monitors["aave_v3"]._borrowers.update(graph_users)
+                from .database import upsert_borrowers
+                upsert_borrowers(graph_users, "aave_v3")
+                logger.info(f"[aave_v3] Discovery: Synced {len(graph_users):,} active borrowers via The Graph")
+
+        # 3. Fallback/Update via event scan for other protocols or recent activity
+        ARBITRUM_SCAN_WINDOW = cfg("scanning", "blocks_to_scan_for_borrowers")
+
         for name, monitor in self.monitors.items():
             last_block = get_last_scan_block(name)
-            if last_block == 0:
+
+            # Use smaller discovery window if we already have borrowers (e.g. from Graph)
+            # This prevents 400 errors during heavy scan logic
+            if name == "aave_v3" and len(monitor._borrowers) > 100:
+                # If we have lots from Graph, just scan very recent blocks
+                from_block = max(last_block + 1, current_block - 2000)
+            elif last_block == 0:
                 from_block = max(0, current_block - ARBITRUM_SCAN_WINDOW)
             else:
                 from_block = last_block + 1
@@ -483,7 +505,8 @@ class MultiProtocolMonitor:
                     if not m: return
                     found = m.scan_users(users, zombie_queue=self.zombie_queue)
                     if found:
-                        liquidatable = [p for p in found if p.get("health_factor", 2.0) <= 1.0]
+                        # Standardized trigger logic: Fire if Discovery OR On-chain < 1.0
+                        liquidatable = [p for p in found if p.get("health_factor", 2.0) <= 1.0 or (p.get("estimated_hf") is not None and p["estimated_hf"] <= 1.0)]
                         if liquidatable and self.on_liquidatable:
                             self.on_liquidatable(liquidatable)
                         for pos in found:
