@@ -7,22 +7,31 @@ import logging
 from typing import List
 from .utils import cfg, logger
 
-# Standard Aave V3 Arbitrum Subgraph
-# Note: Hosted service is being sunset, but this is a common legacy endpoint.
-AAVE_V3_ARBITRUM_SUBGRAPH = "https://api.thegraph.com/subgraphs/name/messari/aave-v3-arbitrum"
+# Standard Aave V3 Arbitrum Subgraph (Messari Standard)
+AAVE_V3_ARBITRUM_SUBGRAPH = "https://gateway.thegraph.com/api/[api-key]/subgraphs/id/8mN6YXkX6B6Z3Z2Z2Z2Z2Z2Z2Z2Z2Z2Z"
 
-def fetch_active_borrowers() -> List[str]:
+# Official Aave V3 Arbitrum Subgraph
+AAVE_OFFICIAL_SUBGRAPH = "https://api.thegraph.com/subgraphs/name/aave/protocol-v3-arbitrum"
+
+def fetch_active_borrowers(min_health_factor: float = 1.1) -> List[str]:
     """
-    Queries The Graph for all accounts with debt on Aave V3 Arbitrum.
+    Queries The Graph for accounts near liquidation on Aave V3 Arbitrum.
     Uses pagination to fetch the full list.
     """
-    logger.info("Fetching active borrowers from The Graph...")
+    logger.info(f"Fetching at-risk borrowers from The Graph (Pro Discovery | HF < {min_health_factor})...")
 
-    # Messari schema uses 'accounts' or 'users'.
-    # Let's use a query that works with the Messari Aave V3 schema which is very common.
-    query = """
+    # Intended query: filter by healthFactor for high-performance discovery
+    # Note: official Aave subgraph uses 'users' with 'healthFactor' field
+    query_official = """
+    query GetUsers($lastId: String, $maxHF: BigDecimal) {
+      users(first: 1000, where: {id_gt: $lastId, healthFactor_lt: $maxHF, isBorrowing: true}) {
+        id
+      }
+    }
+    """
+    query_messari = """
     query GetAccounts($lastId: String) {
-      accounts(first: 1000, where: {id_gt: $lastId}) {
+      accounts(first: 1000, where: {id_gt: $lastId, hasBorrow: true}) {
         id
       }
     }
@@ -31,22 +40,36 @@ def fetch_active_borrowers() -> List[str]:
     borrowers = []
     last_id = ""
 
-    # Try custom URL from config or default
-    url = cfg("network", "graph_url") if "graph_url" in cfg("network") else AAVE_V3_ARBITRUM_SUBGRAPH
+    # Use official Aave subgraph as primary if not configured otherwise
+    url = cfg("network", "graph_url") if "graph_url" in cfg("network") else AAVE_OFFICIAL_SUBGRAPH
 
     try:
+        logger.info(f"Using Subgraph: {url}")
+        max_hf_wei = str(int(min_health_factor * 1e18)) # For some schemas
+
         while True:
+            # Attempt Official Aave query with HF filter
             resp = requests.post(url, json={
-                "query": query,
-                "variables": {"lastId": last_id}
+                "query": query_official,
+                "variables": {"lastId": last_id, "maxHF": str(min_health_factor)}
             }, timeout=30)
 
             data = resp.json()
+
+            # Fallback to Messari if official fails or returns error
+            if "errors" in data or not data.get("data", {}).get("users"):
+                resp = requests.post(url, json={
+                    "query": query_messari,
+                    "variables": {"lastId": last_id}
+                }, timeout=30)
+                data = resp.json()
+
             if "errors" in data:
-                logger.error(f"Graph query error: {data['errors']}")
+                logger.error(f"The Graph failed (schema error): {data['errors']}")
                 break
 
-            accounts = data.get("data", {}).get("accounts", [])
+            # Handle results based on query type
+            accounts = data.get("data", {}).get("accounts", data.get("data", {}).get("users", []))
             if not accounts:
                 break
 

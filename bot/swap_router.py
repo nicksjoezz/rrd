@@ -140,22 +140,14 @@ def get_best_swap(
                 logger.debug(f"Multi-hop quote failed: {e}")
 
         if best_out == 0:
-            logger.warning(f"No swap quote found for {token_in[:8]}->{token_out[:8]}")
-            # Ensure we return valid (empty) params instead of breaking upstream
-            return 0, "single", {
-                "route": "single", "fee": fee_direct,
-                "token_in": token_in, "token_out": token_out
-            }
+            logger.error(f"CRITICAL: No Uniswap V3 swap quote found for {token_in[:8]}->{token_out[:8]}")
+            raise ValueError(f"No swap path found for {token_in} to {token_out}")
 
         return best_out, best_route, best_params
 
     except Exception as e:
         logger.error(f"Swap routing error: {e}")
-        fee = get_swap_fee(token_in, token_out)
-        return 0, "single", {
-            "route": "single", "fee": fee,
-            "token_in": token_in, "token_out": token_out
-        }
+        raise e
 
 
 def log_swap_decision(token_in: str, token_out: str, amount_in: int,

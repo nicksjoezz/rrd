@@ -56,9 +56,9 @@ def _get_coingecko_eth_price() -> float:
 
 def get_token_price_usd(token_address: str, force_fresh: bool = False) -> float:
     """
-    Get token price in USD using Chainlink feeds.
-    Falls back to on-chain Aave oracle pricing via base unit conversion.
-    Returns 0.0 if price unavailable.
+    Get token price in USD using ONLY Chainlink feeds for production accuracy.
+    No fallback to Aave Oracle or CoinGecko as requested.
+    Raises error if price data is unavailable.
     """
     w3   = get_web3()
     addr = token_address.lower()
@@ -69,7 +69,7 @@ def get_token_price_usd(token_address: str, force_fresh: bool = False) -> float:
     if not force_fresh and addr in _price_cache and (now - _price_cache_time.get(addr, 0) < 10):
         return _price_cache[addr]
 
-    # Throttle eth_blockNumber call (expensive RPC)
+    # Throttle eth_blockNumber call
     global _cached_eth_block, _last_eth_block_fetch
     if force_fresh or (now - _last_eth_block_fetch > 10):
         try:
@@ -99,36 +99,12 @@ def get_token_price_usd(token_address: str, force_fresh: bool = False) -> float:
                 _price_cache_time[addr] = now
                 return price
             except Exception as e:
-                logger.debug(f"Chainlink price fetch failed for {sym}: {e}")
+                logger.error(f"CRITICAL: Chainlink price fetch failed for {sym}: {e}")
+                raise e
 
-
-    # Fallback 2: Aave Oracle
-    oracle_addr = _get_aave_oracle()
-    if oracle_addr:
-        try:
-            oracle = w3.eth.contract(address=checksum(oracle_addr), abi=AAVE_ORACLE_ABI)
-            # Aave reports in 8 decimals for USD base
-            price = oracle.functions.getAssetPrice(checksum(token_address)).call() / 1e8
-            if price > 0:
-                sym = get_token_map().get(addr, {}).get("symbol", addr[:10])
-                if _price_cache.get(addr) != price:
-                    logger.info(f"[PRICE] Aave Oracle: {sym} = ${price:,.2f}")
-                _price_cache[addr] = price
-                _price_cache_time[addr] = now
-                return price
-        except Exception: pass
-
-    # Fallback 3: CoinGecko (ETH only, lazy fetch)
-    if addr == cfg("network", "weth").lower():
-        price = _get_coingecko_eth_price()
-        if price > 0:
-            if _price_cache.get(addr) != price:
-                logger.info(f"[PRICE] CoinGecko: ETH = ${price:,.2f}")
-            _price_cache[addr] = price
-            _price_cache_time[addr] = now
-            return price
-
-    return 0.0  # Unknown — will be excluded from profitability check
+    # Raise error if no primary price source is found or fails
+    logger.error(f"CRITICAL: No Chainlink price source for {addr}")
+    raise ValueError(f"Price source missing for {addr}")
 
 
 def estimate_profit_usd(position: dict, force_fresh: bool = False) -> dict:

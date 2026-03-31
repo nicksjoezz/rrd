@@ -60,9 +60,10 @@ class LiquidationExecutor:
         self._account = get_account()
         contract_addr = cfg("wallet", "liquidator_contract")
 
+        is_ready = True
         if not contract_addr or contract_addr == "DEPLOY_CONTRACT_ADDRESS_HERE":
             self._contract = None
-            logger.warning("liquidator_contract not set -- execution will be disabled")
+            is_ready = False
         else:
             self._contract = self._w3.eth.contract(
                 address=checksum(contract_addr),
@@ -73,12 +74,12 @@ class LiquidationExecutor:
             acc_str = f"{self._account.address[:10]}..."
         else:
             acc_str = "NOT_SET"
-            logger.warning("private_key not set -- live execution and simulation disabled")
+            is_ready = False
 
-        logger.info(
-            f"Executor initialized | Contract: {contract_addr[:10] if self._contract else 'None'} | "
-            f"Wallet: {acc_str}"
-        )
+        if is_ready:
+            logger.info(f"Executor initialized | Contract: {contract_addr[:10]} | Wallet: {acc_str}")
+        else:
+            logger.info(f"Executor initialized in MONITOR-ONLY mode | Wallet: {acc_str}")
 
     def _build_tx(self, position: dict, gas_params: dict) -> dict:
         """Build the liquidation transaction dict (used for both simulate and live)."""

@@ -97,6 +97,7 @@ def get_alchemy_web3() -> Web3:
         _alchemy_keys = [k for k in keys if k and k != "YOUR_ALCHEMY_KEY_HERE"]
 
         if not _alchemy_keys:
+            logger.warning("No Alchemy keys provided - using public RPC as last resort")
             return get_public_web3()
 
         # Rotate key
@@ -128,11 +129,17 @@ def get_alchemy_web3() -> Web3:
             _alchemy_w3 = Web3(Web3.HTTPProvider(rpc, session=session, request_kwargs={"timeout": 30}))
 
             if not _alchemy_w3.is_connected():
-                logger.warning(f"Alchemy RPC failed (check key: {rpc[:25]}...) -- using Public fallback")
-                return get_public_web3()
+                logger.error(f"CRITICAL: Alchemy RPC connection failed for key {key[:8]}... ")
+                # Try next key
+                if len(_alchemy_keys) > (_current_key_idx + 1):
+                    _alchemy_w3 = None
+                    return get_alchemy_web3()
+
+                # If all Alchemy keys failed, raise error instead of falling back to public
+                raise ConnectionError(f"All Alchemy RPC keys failed. Cannot continue.")
         except Exception as e:
-            logger.error(f"Alchemy connection error: {e} (URL: {rpc[:25]}...)")
-            return get_public_web3()
+            logger.error(f"Alchemy connection error: {e}")
+            raise e
     return _alchemy_w3
 
 def get_web3() -> Web3:
