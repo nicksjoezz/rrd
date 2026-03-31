@@ -25,6 +25,14 @@ from .gas_manager import get_gas_params, is_gas_spike
 
 logger = logging.getLogger("liquidation_bot.liquidator")
 
+# Common Revert Selectors
+REVERT_MAP = {
+    "0x930bb771": "AaveV3: Health factor is not below threshold",
+    "0x3e176974": "AaveV3: Collateral balance is zero",
+    "0x24a9462d": "AaveV3: Not enough collateral to cover debt",
+    "0xac019623": "UniswapV3: Too little output (Slippage)",
+    "0x08c379a0": "Error(string)", # standard revert
+}
 
 # Aave V3 LiquidationCall event topic (for rival checks)
 LIQUIDATION_TOPIC = Web3.keccak(
@@ -343,32 +351,8 @@ class LiquidationExecutor:
         user     = position["user"]
 
         # ── Final On-Chain Verification ──────────────────────────────────────
-        # Confirm position is still open and liquidatable immediately before fire
-        try:
-            pool_addr = position.get("pool_address")
-            if pool_addr:
-                from .utils import AAVE_POOL_ABI, health_factor_float
-                pool = self._w3.eth.contract(address=checksum(pool_addr), abi=AAVE_POOL_ABI)
-                data = pool.functions.getUserAccountData(checksum(user)).call()
-
-                fresh_hf = health_factor_float(data[5])
-                total_debt = data[1]
-
-                if total_debt == 0:
-                    logger.info(f"[{protocol}] Skipping {user[:8]}... Position already repaid/closed")
-                    return None
-
-                # Log for transparency but don't abort yet; let the pre-flight simulation decide
-                if fresh_hf > 1.0:
-                    logger.info(
-                        f"[{protocol}] Fresh HF check: {user[:8]} is {fresh_hf:.4f} "
-                        f"(Discovery: {position.get('health_factor',0):.4f})"
-                    )
-
-                # Update position object with latest on-chain data
-                position["health_factor"] = fresh_hf
-        except Exception as e:
-            logger.info(f"[{protocol}] Pre-execution HF check failed for {user[:8]}: {e}")
+        # Manual HF check removed as requested to streamline execution.
+        # We rely on the pre-flight simulation below to provide the definitive reason.
 
         # Profitability check (runs in both modes)
         # Use force_fresh=True for final pre-execution check to ensure "at the moment" accuracy
@@ -407,7 +391,21 @@ class LiquidationExecutor:
                     "data": tx["data"],
                 })
             except Exception as e:
-                logger.info(f"[{protocol}] Simulation/Pre-flight failed for {user[:8]}: {e}")
+                err_msg = str(e)
+                # Decode selector if present in message (e.g. "execution reverted: 0x930bb771")
+                reason = "Unknown revert"
+                for selector, desc in REVERT_MAP.items():
+                    if selector in err_msg:
+                        reason = desc
+                        break
+
+                if "execution reverted" in err_msg.lower():
+                    logger.info(
+                        f"[{protocol}] Simulation REVERTED for {user[:8]}: {reason}. "
+                        f"Discovery HF: {position.get('health_factor',0):.4f} | Est. Profit: ${profit_info.get('estimated_profit_usd',0):.2f}"
+                    )
+                else:
+                    logger.info(f"[{protocol}] Simulation/Pre-flight failed for {user[:8]}: {err_msg}")
                 return None
 
             if mode == "simulate":

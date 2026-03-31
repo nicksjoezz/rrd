@@ -7,6 +7,7 @@ import logging
 import logging.handlers
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Optional
 from web3 import Web3
@@ -80,12 +81,27 @@ def get_public_web3() -> Web3:
             logger.warning(f"Public RPC connection failed: {rpc}")
     return _public_w3
 
+_alchemy_keys: list = []
+_current_key_idx: int = 0
+_rpc_lock = threading.RLock()
+
 def get_alchemy_web3() -> Web3:
-    global _alchemy_w3
-    if _alchemy_w3 is None or not _alchemy_w3.is_connected():
-        key = load_config()["network"].get("alchemy_key", "")
-        if not key or key == "YOUR_ALCHEMY_KEY_HERE":
-            return get_public_web3() # Fallback
+    global _alchemy_w3, _alchemy_keys, _current_key_idx
+
+    with _rpc_lock:
+        if _alchemy_w3 is not None and _alchemy_w3.is_connected():
+            return _alchemy_w3
+
+        config = load_config()
+        keys = config["network"].get("alchemy_keys") or [config["network"].get("alchemy_key", "")]
+        _alchemy_keys = [k for k in keys if k and k != "YOUR_ALCHEMY_KEY_HERE"]
+
+        if not _alchemy_keys:
+            return get_public_web3()
+
+        # Rotate key
+        _current_key_idx = (_current_key_idx + 1) % len(_alchemy_keys)
+        key = _alchemy_keys[_current_key_idx]
         
         if key.startswith("http"):
             rpc = key
@@ -121,6 +137,8 @@ def get_alchemy_web3() -> Web3:
 
 def get_web3() -> Web3:
     """General connection — prefers Alchemy but stable."""
+    # During high-frequency operations, returning a fresh provider
+    # can help avoid stale state from lagging nodes.
     return get_alchemy_web3()
 
 def get_account():
