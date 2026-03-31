@@ -11,7 +11,7 @@
   },
   "wallet": {
     "private_key": "YOUR_PRIVATE_KEY_HERE",
-    "liquidator_contract": "DEPLOY_CONTRACT_ADDRESS_HERE"
+    "liquidator_contract": "0xd507fe34DCD797431fb93e989CeCAAd98F8dBeAc"
   },
   "protocols": {
     "aave_v3": {
