@@ -390,13 +390,16 @@ class ProtocolMonitor:
                         if zombie_queue:
                             # Use estimated_hf for queue entry if available, else use reported hf
                             queue_hf = pos.get("estimated_hf") or pos["health_factor"]
-                            # Temporarily inject queue_hf for zombie_queue update
                             pos["_queue_hf"] = queue_hf
                             result = zombie_queue.update(self.name, user, pos)
                             if result == "fire":
                                 liquidatable.append(pos)
-                        elif hf <= 1.0:
-                            liquidatable.append(pos)
+
+                        # Trigger if EITHER reported OR estimated HF < 1.0
+                        # This exploits oracle lag.
+                        if hf <= 1.0 or (pos.get("estimated_hf") is not None and pos["estimated_hf"] <= 1.0):
+                            if pos not in liquidatable:
+                                liquidatable.append(pos)
                             
             except Exception as e:
                 logger.error(f"[{self.name}] Multicall batch error: {e}")
@@ -404,7 +407,9 @@ class ProtocolMonitor:
                     pos = self.check_position(user)
                     if pos:
                         upsert_position(pos)
-                        if pos.get("health_factor", 2.0) <= 1.0: liquidatable.append(pos)
+                        # Trigger on either
+                        if pos.get("health_factor", 2.0) <= 1.0 or (pos.get("estimated_hf") is not None and pos["estimated_hf"] <= 1.0):
+                            liquidatable.append(pos)
 
         return liquidatable
 
@@ -510,10 +515,37 @@ class MultiProtocolMonitor:
 
                 monitor.load_borrowers_from_events(from_block, current_block, on_batch_found=_streaming_callback)
 
+    def scan_zombies(self) -> List[dict]:
+        """
+        Focused scan on only the users in the Zombie Queue.
+        High-frequency path to catch drops immediately.
+        """
+        all_liquidatable = []
+        watching = self.zombie_queue.get_watching()
+        if not watching: return []
+
+        # Group by protocol
+        proto_groups = {}
+        for pos in watching:
+            p = pos["protocol"]
+            if p not in proto_groups: proto_groups[p] = []
+            proto_groups[p].append(pos["user"])
+
+        for name, users in proto_groups.items():
+            monitor = self.monitors.get(name)
+            if not monitor: continue
+            try:
+                found = monitor.scan_users(users, zombie_queue=self.zombie_queue)
+                all_liquidatable.extend(found)
+            except Exception as e:
+                logger.error(f"[{name}] Zombie scan error: {e}")
+
+        return all_liquidatable
+
     def scan_all_protocols(self) -> List[dict]:
         all_liquidatable = []
 
-        # 1. Scan everything
+        # 1. Scan everything (Full sweep)
         for name, monitor in self.monitors.items():
             try:
                 liquidatable = monitor.scan_all(zombie_queue=self.zombie_queue)

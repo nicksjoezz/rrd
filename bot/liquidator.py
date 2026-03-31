@@ -379,36 +379,29 @@ class LiquidationExecutor:
         )
 
         try:
-            # Pre-flight check: simulate the actual transaction in BOTH modes
-            # This catches any complex reverts (e.g., protocol internal state)
-            # before we proceed. In LIVE mode, it saves gas.
-            try:
-                gas_params = get_gas_params(profit_info["estimated_profit_usd"])
-                tx         = self._build_tx(position, gas_params)
-                self._w3.eth.call({
-                    "from": self._account.address,
-                    "to":   self._contract.address,
-                    "data": tx["data"],
-                })
-            except Exception as e:
-                err_msg = str(e)
-                # Decode selector if present in message (e.g. "execution reverted: 0x930bb771")
-                reason = "Unknown revert"
-                for selector, desc in REVERT_MAP.items():
-                    if selector in err_msg:
-                        reason = desc
-                        break
-
-                if "execution reverted" in err_msg.lower():
-                    logger.info(
-                        f"[{protocol}] Simulation REVERTED for {user[:8]}: {reason}. "
-                        f"Discovery HF: {position.get('health_factor',0):.4f} | Est. Profit: ${profit_info.get('estimated_profit_usd',0):.2f}"
-                    )
-                else:
-                    logger.info(f"[{protocol}] Simulation/Pre-flight failed for {user[:8]}: {err_msg}")
-                return None
-
             if mode == "simulate":
+                # Pre-flight check for simulate mode
+                try:
+                    gas_params = get_gas_params(profit_info["estimated_profit_usd"])
+                    tx         = self._build_tx(position, gas_params)
+                    self._w3.eth.call({
+                        "from": self._account.address,
+                        "to":   self._contract.address,
+                        "data": tx["data"],
+                    })
+                except Exception as e:
+                    err_msg = str(e)
+                    reason = "Unknown revert"
+                    for selector, desc in REVERT_MAP.items():
+                        if selector in err_msg:
+                            reason = desc
+                            break
+                    logger.info(
+                        f"[{protocol}] SIMULATION REVERTED for {user[:8]}: {reason}. "
+                        f"HF: {position.get('health_factor',0):.4f} | Est. Profit: ${profit_info.get('estimated_profit_usd',0):.2f}"
+                    )
+                    return None
+
                 # In simulate mode, we can proceed even without a wallet/contract
                 # by doing a "Profit-only" simulation.
                 if not self._account or not self._contract:
@@ -437,6 +430,7 @@ class LiquidationExecutor:
                     logger.warning(f"[{protocol}] Skipping LIVE -- missing private_key or liquidator_contract")
                     return None
 
+                # Fire immediately in LIVE mode as requested.
                 gas_params = get_gas_params(profit_info["estimated_profit_usd"])
                 tx         = self._build_tx(position, gas_params)
                 return self._live_tx(tx, position, profit_info)

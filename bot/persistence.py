@@ -192,7 +192,12 @@ def cleanup_categorized_positions(protocol: str, user: str, current_category: st
 
 def save_categorized_position(pos: Dict[str, Any]):
     """Smart router to save position into correct JSON file based on HF."""
+    # Use best available HF for categorization (either on-chain or estimated)
     hf = float(pos.get("health_factor", 9.9))
+    est_hf = pos.get("estimated_hf")
+    if est_hf is not None:
+        hf = min(hf, float(est_hf))
+
     proto = pos.get("protocol")
     user = pos.get("address") or pos.get("user")
 

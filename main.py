@@ -141,6 +141,8 @@ def _bot_loop():
 
         # ── 24/7 scan loop ────────────────────────────────────────────────────
         cycle = 0
+        last_full_sweep = 0
+
         while _bot_running.is_set():
             cycle += 1
             _bot_stats["cycle"] = cycle
@@ -175,10 +177,19 @@ def _bot_loop():
                 if hot:
                     logger.info(f"[WS] {len(hot)} wallets had on-chain activity -- priority check")
 
-                # Main scan → rank → execute immediately if opportunities found
-                found = _scan_and_execute(monitor, executor, tuner)
-                _bot_stats["positions_found"] = found
-                _bot_stats["last_scan"] = time.strftime("%H:%M:%S")
+                # 1. High-frequency Zombie re-check (every loop)
+                z_found = _process_and_execute(monitor.scan_zombies(), executor, tuner)
+
+                # 2. Main scan (only every interval)
+                found = 0
+                now = time.time()
+                interval = tuner.get_effective_params()["scan_interval"]
+                if now - last_full_sweep >= interval:
+                    last_full_sweep = now
+                    found = _scan_and_execute(monitor, executor, tuner)
+                    _bot_stats["positions_found"] = found
+                    _bot_stats["last_scan"] = time.strftime("%H:%M:%S")
+
 
                 # Adaptive tuning every 50 cycles
                 tuner.tune()
@@ -201,15 +212,8 @@ def _bot_loop():
                 logger.error(f"Bot loop error: {e}", exc_info=True)
                 notify(f"[WARN] Bot error: {str(e)[:200]}")
 
-            # Adaptive interval from auto-tuner (speeds up during volatile markets)
-            interval = tuner.get_effective_params()["scan_interval"]
-            for _ in range(interval):
-                if not _bot_running.is_set():
-                    break
-                # Check for emergency signals during sleep too
-                if _emerg.is_set():
-                    break
-                time.sleep(1)
+            # Fast loop for zombies (1-2 seconds)
+            time.sleep(cfg("strategy", "zombie_queue", "poll_interval_seconds") or 2)
 
     except Exception as e:
         logger.error(f"Bot engine fatal error: {e}", exc_info=True)
