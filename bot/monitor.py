@@ -278,16 +278,16 @@ class ProtocolMonitor:
                 remove_position(self.name, user)
                 return None
 
-            # ── Real-Time Edge ──────────────────────────────────────────
-            hf_onchain = health_factor_float(hf_raw)
-            hf = hf_onchain
+            # ── Health Factor Source of Truth ──────────────────────────
+            hf = health_factor_float(hf_raw)
+            est_hf = None
             best_info = None
 
             # Only do expensive fresh check if truly near liquidation
             if hf < 1.1:
                 best_info = self._get_best_tokens_and_fresh_hf(user)
                 if best_info and best_info["fresh_hf"] is not None:
-                    hf = best_info["fresh_hf"]
+                    est_hf = best_info["fresh_hf"]
 
             col_usd    = wei_to_usd_base(total_col_base)
             debt_usd   = wei_to_usd_base(total_debt_base)
@@ -296,7 +296,7 @@ class ProtocolMonitor:
 
             if debt_usd < min_debt or debt_usd > max_debt: return None
 
-            if hf > 1.15 and hf_onchain > 1.15: return None
+            if hf > 1.15 and (est_hf is None or est_hf > 1.15): return None
 
             if not best_info:
                 best_info = self._get_best_tokens_and_fresh_hf(user)
@@ -328,7 +328,7 @@ class ProtocolMonitor:
                 "debt_symbol":       debt_symbol,
                 "debt_to_cover":     debt_to_cover,
                 "health_factor":     hf,
-                "health_factor_onchain": hf_onchain,
+                "estimated_hf":      est_hf,
                 "total_debt_usd":    debt_usd,
                 "total_col_usd":     col_usd,
                 "pool_address":      self.pool_addr,
@@ -388,10 +388,14 @@ class ProtocolMonitor:
                         upsert_position(pos)
 
                         if zombie_queue:
+                            # Use estimated_hf for queue entry if available, else use reported hf
+                            queue_hf = pos.get("estimated_hf") or pos["health_factor"]
+                            # Temporarily inject queue_hf for zombie_queue update
+                            pos["_queue_hf"] = queue_hf
                             result = zombie_queue.update(self.name, user, pos)
                             if result == "fire":
                                 liquidatable.append(pos)
-                        elif hf <= 1.0 or pos.get("health_factor_onchain", 2.0) <= 1.0:
+                        elif hf <= 1.0:
                             liquidatable.append(pos)
                             
             except Exception as e:

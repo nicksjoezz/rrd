@@ -49,7 +49,8 @@ class ZombieQueue:
         Returns "fire" if position is ready for liquidation, else "watch" or None.
         """
         key = f"{protocol}:{user.lower()}"
-        hf  = position.get("health_factor", 99.0)
+        # Use injected _queue_hf if present, otherwise fallback
+        hf  = position.get("_queue_hf", position.get("health_factor", 99.0))
 
         with self._lock:
             if hf <= self.fire_hf:

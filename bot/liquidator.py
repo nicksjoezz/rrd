@@ -330,6 +330,14 @@ class LiquidationExecutor:
         Execute or simulate one liquidation depending on current mode.
         Reads mode fresh from config.json so Settings changes apply instantly.
         """
+        # 1. Refresh instance data from config
+        self._account = get_account()
+        contract_addr = cfg("wallet", "liquidator_contract")
+        if contract_addr and contract_addr != "DEPLOY_CONTRACT_ADDRESS_HERE":
+            self._contract = self._w3.eth.contract(address=checksum(contract_addr), abi=LIQUIDATOR_CONTRACT_ABI)
+        else:
+            self._contract = None
+
         mode     = get_mode()
         protocol = position.get("protocol", "unknown")
         user     = position["user"]
@@ -350,18 +358,17 @@ class LiquidationExecutor:
                     logger.info(f"[{protocol}] Skipping {user[:8]}... Position already repaid/closed")
                     return None
 
+                # Log for transparency but don't abort yet; let the pre-flight simulation decide
                 if fresh_hf > 1.0:
-                    # Log comparison for transparency
                     logger.info(
-                        f"[{protocol}] Skipping {user[:8]}... Position healthy on-chain. "
-                        f"Discovery HF: {position.get('health_factor',0):.4f} | Fresh On-chain HF: {fresh_hf:.4f}"
+                        f"[{protocol}] Fresh HF check: {user[:8]} is {fresh_hf:.4f} "
+                        f"(Discovery: {position.get('health_factor',0):.4f})"
                     )
-                    if mode == "live": return None
 
                 # Update position object with latest on-chain data
                 position["health_factor"] = fresh_hf
         except Exception as e:
-            logger.info(f"[{protocol}] Pre-execution verification failed for {user[:8]}: {e}")
+            logger.info(f"[{protocol}] Pre-execution HF check failed for {user[:8]}: {e}")
 
         # Profitability check (runs in both modes)
         # Use force_fresh=True for final pre-execution check to ensure "at the moment" accuracy
@@ -388,21 +395,20 @@ class LiquidationExecutor:
         )
 
         try:
-            if mode == "live":
-                # Pre-flight check: simulate the actual transaction in LIVE mode
-                # This catches any complex reverts (e.g., protocol internal state)
-                # before we send a real tx and pay gas.
-                try:
-                    gas_params = get_gas_params(profit_info["estimated_profit_usd"])
-                    tx         = self._build_tx(position, gas_params)
-                    self._w3.eth.call({
-                        "from": self._account.address,
-                        "to":   self._contract.address,
-                        "data": tx["data"],
-                    })
-                except Exception as e:
-                    logger.info(f"[{protocol}] Pre-flight simulation failed for {user[:8]}: {e}")
-                    return None
+            # Pre-flight check: simulate the actual transaction in BOTH modes
+            # This catches any complex reverts (e.g., protocol internal state)
+            # before we proceed. In LIVE mode, it saves gas.
+            try:
+                gas_params = get_gas_params(profit_info["estimated_profit_usd"])
+                tx         = self._build_tx(position, gas_params)
+                self._w3.eth.call({
+                    "from": self._account.address,
+                    "to":   self._contract.address,
+                    "data": tx["data"],
+                })
+            except Exception as e:
+                logger.info(f"[{protocol}] Simulation/Pre-flight failed for {user[:8]}: {e}")
+                return None
 
             if mode == "simulate":
                 # In simulate mode, we can proceed even without a wallet/contract
