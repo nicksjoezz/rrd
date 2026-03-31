@@ -267,6 +267,10 @@ class LiquidationExecutor:
                 logger.info(f"[{protocol}] SIMULATED [FAIL] | {reason} | Latency: {latency:.2f}s")
             return None
 
+        except Exception as e:
+            logger.info(f"[{protocol}] SIMULATION ERROR for {user[:8]}: {e}")
+            return None
+
     def _live_tx(self, tx: dict, position: dict, profit_info: dict) -> Optional[str]:
         """Live mode: sign and broadcast the real transaction."""
         protocol = position.get("protocol", "unknown")
@@ -311,7 +315,7 @@ class LiquidationExecutor:
                 return None
 
         except Exception as e:
-            logger.error(f"[{protocol}] TX error: {e}")
+            logger.info(f"[{protocol}] TX error for {user[:8]}: {e}")
             if cfg("notifications", "notify_on_error"):
                 notify(f"[WARN] Bot error [{protocol}]: {str(e)[:200]}")
             return None
@@ -344,14 +348,13 @@ class LiquidationExecutor:
                 if fresh_hf > 1.0 and mode == "live":
                     # In simulate mode we still might want to see it,
                     # but in live we MUST skip if HF > 1.0
-                    # Log as DEBUG to avoid noise during mass scans
-                    logger.debug(f"[{protocol}] Skipping {user[:8]}... Position recovered (HF={fresh_hf:.4f})")
+                    logger.info(f"[{protocol}] Skipping {user[:8]}... Position recovered (HF={fresh_hf:.4f})")
                     return None
 
                 # Update position object with latest on-chain data
                 position["health_factor"] = fresh_hf
         except Exception as e:
-            logger.warning(f"[{protocol}] Pre-execution verification failed for {user[:8]}: {e}")
+            logger.info(f"[{protocol}] Pre-execution verification failed for {user[:8]}: {e}")
 
         # Profitability check (runs in both modes)
         # Use force_fresh=True for final pre-execution check to ensure "at the moment" accuracy
