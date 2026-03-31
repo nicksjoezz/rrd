@@ -31,34 +31,18 @@ def _get_aave_oracle() -> Optional[str]:
     if _aave_oracle_addr: return _aave_oracle_addr
     try:
         w3 = get_web3()
-        # Aave V3 Pool Addresses Provider on Arbitrum
         provider_addr = cfg("protocols", "aave_v3", "addresses_provider")
         provider = w3.eth.contract(address=checksum(provider_addr), abi=ADDRESSES_PROVIDER_ABI)
         _aave_oracle_addr = provider.functions.getPriceOracle().call()
         return _aave_oracle_addr
     except Exception: return None
 
-def _get_coingecko_eth_price() -> float:
-    """Final fallback for ETH price (with 60s cache)."""
-    global _cg_eth_cache, _cg_eth_time
-    now = time.time()
-    if now - _cg_eth_time < 60 and _cg_eth_cache > 0:
-        return _cg_eth_cache
-
-    try:
-        r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd", timeout=5)
-        price = float(r.json()["ethereum"]["usd"])
-        if price > 0:
-            _cg_eth_cache = price
-            _cg_eth_time = now
-        return price
-    except Exception: return _cg_eth_cache
-
 def get_token_price_usd(token_address: str, force_fresh: bool = False) -> float:
     """
-    Get token price in USD using ONLY Chainlink feeds for production accuracy.
-    No fallback to Aave Oracle or CoinGecko as requested.
-    Raises error if price data is unavailable.
+    Get token price in USD using 3 methods as requested:
+    1. Chainlink (Primary)
+    2. Aave Oracle (Secondary)
+    3. CoinGecko (Fallback for ETH/WETH)
     """
     w3   = get_web3()
     addr = token_address.lower()
@@ -69,42 +53,70 @@ def get_token_price_usd(token_address: str, force_fresh: bool = False) -> float:
     if not force_fresh and addr in _price_cache and (now - _price_cache_time.get(addr, 0) < 10):
         return _price_cache[addr]
 
-    # Throttle eth_blockNumber call
-    global _cached_eth_block, _last_eth_block_fetch
-    if force_fresh or (now - _last_eth_block_fetch > 10):
-        try:
-            _cached_eth_block = w3.eth.block_number
-            _last_eth_block_fetch = now
-        except Exception: pass
+    token_map  = get_token_map()
+    token_info = token_map.get(addr)
+    sym = token_info["symbol"] if token_info else addr[:10]
 
-    # Chainlink feed lookup
+    # Method 1: Chainlink
     chainlink_feeds = cfg("oracle", "chainlink_feeds")
-    token_map       = get_token_map()
-    token_info      = token_map.get(addr)
+    feed_key = f"{sym}_USD"
+    if feed_key in chainlink_feeds:
+        try:
+            feed = w3.eth.contract(
+                address=checksum(chainlink_feeds[feed_key]),
+                abi=CHAINLINK_FEED_ABI
+            )
+            data  = feed.functions.latestRoundData().call()
+            price = data[1] / 1e8
+            logger.info(f"[PRICE] Chainlink used for {sym}: ${price:,.2f}")
+            _price_cache[addr] = price
+            _price_cache_time[addr] = now
+            return price
+        except Exception as e:
+            logger.debug(f"Chainlink fetch failed for {sym}: {e}")
 
-    if token_info:
-        sym = token_info["symbol"]
-        feed_key = f"{sym}_USD"
-        if feed_key in chainlink_feeds:
-            try:
-                feed = w3.eth.contract(
-                    address=checksum(chainlink_feeds[feed_key]),
-                    abi=CHAINLINK_FEED_ABI
-                )
-                data  = feed.functions.latestRoundData().call()
-                price = data[1] / 1e8  # Chainlink uses 8 decimals
-                if _price_cache.get(addr) != price:
-                    logger.info(f"[PRICE] Chainlink: {sym} = ${price:,.2f}")
+    # Method 2: Aave Oracle
+    oracle_addr = _get_aave_oracle()
+    if oracle_addr:
+        try:
+            oracle = w3.eth.contract(address=checksum(oracle_addr), abi=AAVE_ORACLE_ABI)
+            price_raw = oracle.functions.getAssetPrice(checksum(token_address)).call()
+            price = price_raw / 1e8 # Aave V3 uses 8 decimals for base currency (USD) on Arbitrum
+            logger.info(f"[PRICE] Aave Oracle used for {sym}: ${price:,.2f}")
+            _price_cache[addr] = price
+            _price_cache_time[addr] = now
+            return price
+        except Exception as e:
+            logger.debug(f"Aave Oracle fetch failed for {sym}: {e}")
+
+    # Method 3: CoinGecko (Only for WETH/ETH)
+    weth_addr = cfg("network", "weth").lower()
+    if addr == weth_addr or sym == "WETH" or sym == "ETH":
+        global _cg_eth_cache, _cg_eth_time
+        if not force_fresh and now - _cg_eth_time < 60 and _cg_eth_cache > 0:
+            logger.info(f"[PRICE] CoinGecko (cached) used for ETH: ${_cg_eth_cache:,.2f}")
+            return _cg_eth_cache
+        try:
+            r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd", timeout=5)
+            price = float(r.json()["ethereum"]["usd"])
+            if price > 0:
+                _cg_eth_cache = price
+                _cg_eth_time = now
+                logger.info(f"[PRICE] CoinGecko used for ETH: ${price:,.2f}")
                 _price_cache[addr] = price
                 _price_cache_time[addr] = now
                 return price
-            except Exception as e:
-                logger.error(f"CRITICAL: Chainlink price fetch failed for {sym}: {e}")
-                raise e
+        except Exception as e:
+            logger.debug(f"CoinGecko fetch failed: {e}")
 
-    # Raise error if no primary price source is found or fails
-    logger.error(f"CRITICAL: No Chainlink price source for {addr}")
-    raise ValueError(f"Price source missing for {addr}")
+    # Final Fallback from config (if any)
+    fallback = cfg("oracle", "fallback_eth_price")
+    if (addr == weth_addr or sym == "WETH") and fallback:
+        logger.warning(f"[PRICE] Using hardcoded fallback for ETH: ${fallback}")
+        return fallback
+
+    logger.error(f"CRITICAL: All price sources failed for {sym} ({addr})")
+    raise ValueError(f"Price unavailable for {sym}")
 
 
 def estimate_profit_usd(position: dict, force_fresh: bool = False) -> dict:

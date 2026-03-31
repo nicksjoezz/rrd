@@ -138,38 +138,8 @@ class MempoolWatcher:
                     await asyncio.sleep(2)
 
         except Exception as e:
-            logger.error(f"[MEMPOOL] WebSocket watcher failed: {e}")
-            logger.info("[MEMPOOL] Falling back to HTTP polling mode")
-
-    def watch_pending_http(self):
-        """
-        HTTP polling fallback — slower but works with any RPC.
-        Polls for pending transactions every 2 seconds.
-        """
-        w3 = get_web3()
-        logger.info("[MEMPOOL] Starting HTTP pending tx poll (slower than WebSocket)")
-        self._running = True
-
-        try:
-            pending_filter = w3.eth.filter("pending")
-        except Exception as e:
-            logger.warning(f"[MEMPOOL] Pending filter not supported by this RPC: {e}")
-            return
-
-        import time
-        while self._running:
-            try:
-                hashes = pending_filter.get_new_entries()
-                for tx_hash in hashes[:20]:
-                    try:
-                        tx = w3.eth.get_transaction(tx_hash)
-                        self._analyze_pending_tx(dict(tx))
-                    except Exception:
-                        pass
-                time.sleep(2)
-            except Exception as e:
-                logger.debug(f"[MEMPOOL] Poll error: {e}")
-                time.sleep(5)
+            logger.error(f"CRITICAL: Mempool WebSocket watcher failed: {e}. Bot requires real-time mempool data for competitive edge.")
+            self._running = False
 
     def stop(self):
         self._running = False
@@ -188,12 +158,12 @@ def start_mempool_watcher_thread(on_oracle_pending=None, on_large_swap=None):
     )
 
     ws_url = cfg("network", "rpc_ws")
-    if ws_url and not ws_url.startswith("wss://YOUR"):
-        target = lambda: asyncio.run(watcher.watch_pending_async(ws_url))
-        label  = "mempool-ws"
-    else:
-        target = watcher.watch_pending_http
-        label  = "mempool-http"
+    if not ws_url or ws_url.startswith("wss://YOUR"):
+        logger.error("CRITICAL: WebSocket RPC not configured. Mempool watching disabled.")
+        return None
+
+    target = lambda: asyncio.run(watcher.watch_pending_async(ws_url))
+    label  = "mempool-ws"
 
     thread = threading.Thread(target=target, daemon=True, name=label)
     thread.start()

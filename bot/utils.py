@@ -69,17 +69,7 @@ def setup_logging() -> logging.Logger:
 logger = setup_logging()
 
 # ── Web3 ──────────────────────────────────────────────────────────────────────
-_public_w3: Optional[Web3] = None
 _alchemy_w3: Optional[Web3] = None
-
-def get_public_web3() -> Web3:
-    global _public_w3
-    if _public_w3 is None or not _public_w3.is_connected():
-        rpc = cfg("network", "rpc_http")
-        _public_w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 60}))
-        if not _public_w3.is_connected():
-            logger.warning(f"Public RPC connection failed: {rpc}")
-    return _public_w3
 
 _alchemy_keys: list = []
 _current_key_idx: int = 0
@@ -103,8 +93,8 @@ def get_alchemy_web3() -> Web3:
         _alchemy_keys = [k for k in raw_keys if k and "YOUR_" not in k]
 
         if not _alchemy_keys:
-            logger.warning("No valid Alchemy keys found - using public RPC as last resort")
-            return get_public_web3()
+            logger.error("CRITICAL: No Alchemy keys provided in config. Bot requires a high-performance RPC to operate.")
+            raise ValueError("Missing Alchemy RPC keys.")
 
         # Iterate through keys to find a working one
         initial_idx = _current_key_idx
@@ -119,37 +109,39 @@ def get_alchemy_web3() -> Web3:
 
                 # Robust retry strategy for 429/5xx errors
                 retry_strategy = Retry(
-                    total=3,
-                    backoff_factor=0.5,
+                    total=2,
+                    backoff_factor=1,
                     status_forcelist=[429, 500, 502, 503, 504],
                 )
                 adapter = HTTPAdapter(max_retries=retry_strategy)
                 session = requests.Session()
                 session.mount("https://", adapter)
-                session.mount("http://", adapter)
 
                 _alchemy_w3 = Web3(Web3.HTTPProvider(rpc, session=session, request_kwargs={"timeout": 30}))
 
                 if _alchemy_w3.is_connected():
-                    logger.debug(f"Connected to Alchemy RPC (Key: {key[:8]}...)")
                     return _alchemy_w3
                 else:
                     logger.error(f"Alchemy RPC connection failed for key {key[:8]}...")
             except Exception as e:
-                logger.error(f"Alchemy key {key[:8]}... error: {e}")
+                logger.error(f"Alchemy key error: {e}")
 
             # Try next key
             _current_key_idx = (_current_key_idx + 1) % len(_alchemy_keys)
             if _current_key_idx == initial_idx:
                 # We've tried all keys and none worked
-                logger.error("All Alchemy RPC keys failed. Cannot continue.")
+                logger.error("CRITICAL ERROR: All Alchemy RPC keys failed. Bot stopping to prevent faulty execution.")
                 raise ConnectionError("No working Alchemy RPC keys available.")
 
 def get_web3() -> Web3:
-    """General connection — prefers Alchemy but stable."""
-    # During high-frequency operations, returning a fresh provider
-    # can help avoid stale state from lagging nodes.
-    return get_alchemy_web3()
+    """General connection — prefers Alchemy but falls back to public RPC for discovery tasks if Alchemy is down."""
+    try:
+        return get_alchemy_web3()
+    except Exception:
+        # Final safety fallback to public RPC for READ-ONLY discovery
+        # This prevents the bot from crashing during scan/discovery if Alchemy is rate-limited
+        rpc = cfg("network", "rpc_http")
+        return Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 60}))
 
 def get_account():
     try:

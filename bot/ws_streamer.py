@@ -130,39 +130,6 @@ class WebSocketStreamer:
         except Exception as e:
             logger.debug(f"[WS] Log parse error: {e}")
 
-    def _watch_http_polling(self):
-        """
-        HTTP polling fallback — creates event filters and polls for new logs.
-        Less real-time than WebSocket but works with any RPC.
-        """
-        w3 = get_web3()
-        pool_addrs = list(self._protocol_pools.keys())
-        if not pool_addrs:
-            return
-
-        logger.info("[WS] Starting HTTP event polling (WebSocket not configured)")
-        self._running = True
-
-        try:
-            # Create a filter for all tracked pool events
-            event_filter = w3.eth.filter({
-                "address": [checksum(a) for a in pool_addrs],
-                "topics":  [list(EVENT_SIGS.values())]
-            })
-        except Exception as e:
-            logger.warning(f"[WS] Cannot create event filter: {e}")
-            return
-
-        while self._running:
-            try:
-                new_logs = event_filter.get_new_entries()
-                for log in new_logs:
-                    self._handle_log(dict(log))
-                time.sleep(3)  # poll every 3 seconds
-            except Exception as e:
-                logger.debug(f"[WS] Poll error: {e}")
-                time.sleep(10)
-
     async def _watch_ws_async(self, ws_url: str):
         """
         True WebSocket subscription — events arrive in near real-time.
@@ -190,21 +157,18 @@ class WebSocketStreamer:
                         self._handle_log(dict(event))
 
         except Exception as e:
-            logger.error(f"[WS] WebSocket error: {e}")
-            logger.info("[WS] Falling back to HTTP polling")
-            self._watch_http_polling()
+            logger.error(f"CRITICAL: Event Streaming WebSocket error: {e}. Bot requires real-time events for competitive discovery.")
+            self._running = False
 
     def start(self):
         """Start the streamer in a daemon thread."""
         ws_url = cfg("network", "rpc_ws")
-        use_ws = ws_url and not ws_url.startswith("wss://arb1") and "YOUR" not in ws_url
+        if not ws_url or "YOUR" in ws_url:
+            logger.error("CRITICAL: WebSocket RPC not configured. Event streaming disabled.")
+            return
 
-        if use_ws:
-            target = lambda: asyncio.run(self._watch_ws_async(ws_url))
-            label  = "ws-stream"
-        else:
-            target = self._watch_http_polling
-            label  = "http-events"
+        target = lambda: asyncio.run(self._watch_ws_async(ws_url))
+        label  = "ws-stream"
 
         self._thread = threading.Thread(target=target, daemon=True, name=label)
         self._thread.start()

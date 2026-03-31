@@ -19,7 +19,7 @@ from typing import List, Optional
 from web3 import Web3
 
 from .utils import (
-    get_web3, get_public_web3, get_alchemy_web3,
+    get_web3, get_alchemy_web3,
     cfg, get_token_map, checksum,
     wei_to_usd_base, health_factor_float,
     AAVE_POOL_ABI, DATA_PROVIDER_ABI,
@@ -403,6 +403,7 @@ class ProtocolMonitor:
                     dec = w3.codec.decode(["uint256", "uint256", "uint256", "uint256", "uint256", "uint256"], raw_res)
                     
                     if dec[1] == 0:
+                        logger.info(f"[{self.name}] Borrower {user[:10]} has zero debt — removing from tracking")
                         if user in self._borrowers:
                             self._borrowers.remove(user)
                             remove_borrower(self.name, user)
@@ -513,21 +514,15 @@ class MultiProtocolMonitor:
                 upsert_borrowers(graph_users, "aave_v3")
                 logger.info(f"[aave_v3] Discovery: Synced {len(graph_users):,} active borrowers via The Graph")
 
-        # 3. Fallback/Update via event scan for other protocols or recent activity
+        # 3. For other protocols or missing Graph data, use event scan
+        # Note: Aave V3 strictly uses Graph as intended. Fallback to event scan is for secondary protocols only.
         ARBITRUM_SCAN_WINDOW = cfg("scanning", "blocks_to_scan_for_borrowers")
 
         for name, monitor in self.monitors.items():
-            last_block = get_last_scan_block(name)
+            if name == "aave_v3": continue # Graph is the intended discovery for Aave V3
 
-            # Use smaller discovery window if we already have borrowers (e.g. from Graph)
-            # This prevents 400 errors during heavy scan logic
-            if name == "aave_v3" and len(monitor._borrowers) > 100:
-                # If we have lots from Graph, just scan very recent blocks
-                from_block = max(last_block + 1, current_block - 2000)
-            elif last_block == 0:
-                from_block = max(0, current_block - ARBITRUM_SCAN_WINDOW)
-            else:
-                from_block = last_block + 1
+            last_block = get_last_scan_block(name)
+            from_block = (last_block + 1) if last_block > 0 else max(0, current_block - ARBITRUM_SCAN_WINDOW)
             
             if from_block < current_block:
                 def _streaming_callback(proto_name, users):
@@ -535,8 +530,7 @@ class MultiProtocolMonitor:
                     if not m: return
                     found = m.scan_users(users, zombie_queue=self.zombie_queue)
                     if found:
-                        # Standardized trigger logic: Fire if Discovery OR On-chain < 1.0
-                        liquidatable = [p for p in found if p.get("health_factor", 2.0) <= 1.0 or (p.get("estimated_hf") is not None and p["estimated_hf"] <= 1.0)]
+                        liquidatable = [p for p in found if p.get("health_factor", 2.0) <= 1.0]
                         if liquidatable and self.on_liquidatable:
                             self.on_liquidatable(liquidatable)
                         for pos in found:
