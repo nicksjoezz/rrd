@@ -1,27 +1,23 @@
+import requests
 import json
-from web3 import Web3
+url = "https://arb-mainnet.g.alchemy.com/v2/9fVR5rZUC-g2L5zbeywTA"
+def get_logs(start, end):
+    payload = {
+        "jsonrpc": "2.0", "id": 1, "method": "eth_getLogs",
+        "params": [{
+            "address": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+            "fromBlock": hex(start), "toBlock": hex(end),
+            "topics": ["0xe410921a33261a758b54010964644061ad574acc3676d093da59f3cb2949640f"]
+        }]
+    }
+    r = requests.post(url, json=payload)
+    return r.json()
 
-with open('config.json') as f:
-    config = json.load(f)
+# Get latest block
+r = requests.post(url, json={"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]})
+latest = int(r.json()['result'], 16)
+print(f"Latest: {latest}")
 
-rpc = config['network']['rpc_http']
-w3 = Web3(Web3.HTTPProvider(rpc))
-
-pool = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
-topic = "0xb3d084820fb1a9decffb176436bd02558d15fac9b0ddfed8c465bc7359d7dce0"
-
-current = w3.eth.block_number
-start = current - 500
-
-print(f"Scanning {start} to {current}...")
-
-logs = w3.eth.get_logs({
-    "address": Web3.to_checksum_address(pool),
-    "topics": [topic],
-    "fromBlock": start,
-    "toBlock": current
-})
-
-print(f"Found {len(logs)} logs")
-for log in logs[:3]:
-    print(f"  Log: {log['topics'][2].hex()[-40:]}")
+# Scan last 100 blocks
+res = get_logs(latest - 100, latest)
+print(res)
