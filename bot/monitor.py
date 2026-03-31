@@ -162,6 +162,7 @@ class ProtocolMonitor:
         """
         Calculates HF using fresh local prices and returns the best
         collateral/debt tokens for liquidation.
+        Includes E-Mode support for Aave V3.
         """
         if not self.data_provider: return None
         from .profitability import get_token_price_usd
@@ -173,40 +174,58 @@ class ProtocolMonitor:
         total_fresh_weighted_col = 0
         total_fresh_debt = 0
 
-        # 1. Get user configuration to see which assets they actually have
+        # 1. E-Mode Check
+        e_mode_category = 0
+        e_mode_data = None
         try:
-            # Aave V3: getUserConfiguration returns a bitmask of assets
-            # Each pair of bits represents [isCollateral, isBorrowing]
+            e_mode_category = self.pool.functions.getUserEMode(checksum(user)).call()
+            if e_mode_category > 0:
+                e_mode_data = self.pool.functions.getEModeCategoryData(e_mode_category).call()
+                # e_mode_data: (ltv, threshold, bonus, oracle, label)
+        except Exception:
+            pass
+
+        # 2. Get user configuration
+        try:
             config_bits = self.pool.functions.getUserConfiguration(checksum(user)).call()
             if config_bits == 0: return None
         except Exception:
-            config_bits = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF # Fallback to scan all if bitmask fails
+            config_bits = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
 
-        # We need to know which index corresponds to which asset
-        # Aave V3 Pool: getReservesList() returns list of addresses in order
         try:
             reserves_list = self.pool.functions.getReservesList().call()
         except Exception:
             reserves_list = []
 
-        # Universal asset support: iterate over ALL reserves in the pool
         all_prices_available = True
 
+        # Multicall for user reserve data
+        w3 = get_web3()
+        mc = w3.eth.contract(address=MULTICALL3_ADDR, abi=MULTICALL3_ABI)
+        calls = []
+        indices = []
+
         for i, addr in enumerate(reserves_list):
-            # Check bitmask: index i corresponds to bits i*2 and i*2+1
             is_using = (config_bits >> (i * 2)) & 3
             if not is_using: continue
 
-            addr_l = addr.lower()
-            try:
-                rd = self.data_provider.functions.getUserReserveData(
-                    checksum(addr), checksum(user)
-                ).call()
+            call_data = self.data_provider.encodeABI("getUserReserveData", [checksum(addr), checksum(user)])
+            calls.append({"target": self.data_provider.address, "callData": call_data})
+            indices.append((i, addr))
+
+        if not calls: return None
+
+        try:
+            _, return_data = mc.functions.aggregate(calls).call()
+            for j, raw_res in enumerate(return_data):
+                i, addr = indices[j]
+                rd = w3.codec.decode(["uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "bool"], raw_res)
 
                 col_bal = rd[0] # currentATokenBalance
                 debt_bal = rd[2] # currentVariableDebt
                 if col_bal == 0 and debt_bal == 0: continue
 
+                addr_l = addr.lower()
                 price = get_token_price_usd(addr)
                 if price <= 0:
                     all_prices_available = False
@@ -216,20 +235,27 @@ class ProtocolMonitor:
                     all_prices_available = False
                     continue
 
+                # Apply E-Mode Threshold/Bonus
+                current_threshold = config["threshold"]
+                current_bonus = config["bonus"]
+                if e_mode_data and e_mode_category > 0:
+                    current_threshold = e_mode_data[1] / 10000
+                    current_bonus = (e_mode_data[2] - 10000) / 10000 if e_mode_data[2] > 10000 else 0
+
                 decimals = config["decimals"]
                 sym = get_token_map().get(addr_l, {}).get("symbol", addr[:10])
 
                 if col_bal > 0:
                     if price > 0:
                         usd_val = (col_bal / 10**decimals) * price
-                        total_fresh_weighted_col += usd_val * config["threshold"]
-                        score = usd_val * (1 + config["bonus"]) if cfg("strategy", "prioritize_high_bonus") else usd_val
+                        total_fresh_weighted_col += usd_val * current_threshold
+                        score = usd_val * (1 + current_bonus) if cfg("strategy", "prioritize_high_bonus") else usd_val
                     else:
                         score = 1
 
                     if score > best_col_score:
                         best_col_score = score
-                        best_col = (addr, sym, config["bonus"])
+                        best_col = (addr, sym, current_bonus)
 
                 if debt_bal > 0:
                     if price > 0:
@@ -242,7 +268,9 @@ class ProtocolMonitor:
                     if score > best_debt_score:
                         best_debt_score = score
                         best_debt = (addr, sym, debt_bal)
-            except Exception: continue
+        except Exception as e:
+            logger.debug(f"[{self.name}] User data multicall fail for {user[:8]}: {e}")
+            return None
 
         if not best_col or not best_debt or total_fresh_debt == 0 or not all_prices_available:
             # If we don't have enough data for a fresh HF, return tokens but no HF
@@ -389,27 +417,29 @@ class ProtocolMonitor:
                     
                     pos = self.check_position(user, account_data=dec)
                     if pos:
-                        # Persist to categorized JSON
-                        upsert_position(pos)
+                        # ── Borrower Active Verification ────────────────────────────
+                        # Only record if position has non-zero debt and user has supply
+                        if pos.get("total_debt_usd", 0) > 0 and pos.get("total_col_usd", 0) > 0:
+                            # Persist to categorized JSON
+                            upsert_position(pos)
 
-                        if zombie_queue:
-                            # Use estimated_hf for queue entry if available, else use reported hf
-                            queue_hf = pos.get("estimated_hf") or pos["health_factor"]
-                            pos["_queue_hf"] = queue_hf
-                            result = zombie_queue.update(self.name, user, pos)
-                            if result == "fire":
-                                liquidatable.append(pos)
+                            if zombie_queue:
+                                # Use estimated_hf for queue entry if available, else use reported hf
+                                queue_hf = pos.get("estimated_hf") or pos["health_factor"]
+                                pos["_queue_hf"] = queue_hf
+                                result = zombie_queue.update(self.name, user, pos)
+                                if result == "fire":
+                                    liquidatable.append(pos)
 
-                        # Standardized Architecture Trigger:
-                        # healthFactor < 1.0 -> Liquidatable (Fire immediately)
-                        # healthFactor 1.0 - 1.1 -> At Risk (Watch/Zombie)
+                            # Standardized Architecture Trigger:
+                            # healthFactor < 1.0 -> Liquidatable (Fire immediately)
+                            # healthFactor 1.0 - 1.1 -> At Risk (Watch/Zombie)
 
-                        if hf < 1.0:
-                            if pos not in liquidatable:
-                                liquidatable.append(pos)
-                        elif hf <= 1.1:
-                            # Already handled by zombie_queue.update
-                            pass
+                            if hf < 1.0:
+                                if pos not in liquidatable:
+                                    liquidatable.append(pos)
+                        else:
+                            remove_position(self.name, user)
                             
             except Exception as e:
                 logger.error(f"[{self.name}] Multicall batch error: {e}")

@@ -79,21 +79,29 @@ def get_gas_params(estimated_profit_usd: float = 0.0) -> dict:
     recommended = base_gwei * mult
 
     # Scale cap by profit — willing to pay more for bigger opportunities
-    if estimated_profit_usd >= 500:
-        cap = max_gwei * 3.0  # Very aggressive for big wins
+    # For Arbitrum, base fee is usually very low, so priority fee is the primary way to compete.
+    current_prio_gwei = prio_gwei
+
+    if estimated_profit_usd >= 1000:
+        cap = max_gwei * 5.0
+        current_prio_gwei = prio_gwei * 10.0 # Aggressive priority for Whales
+    elif estimated_profit_usd >= 500:
+        cap = max_gwei * 3.0
+        current_prio_gwei = prio_gwei * 5.0
     elif estimated_profit_usd >= 100:
-        cap = max_gwei * 2.0  # Highly competitive for solid wins
+        cap = max_gwei * 2.0
+        current_prio_gwei = prio_gwei * 2.0
     else:
         cap = max_gwei
 
     max_fee_gwei = min(recommended, cap)
 
     # Never go below base fee + priority (tx won't land)
-    min_viable = base_gwei + prio_gwei
+    min_viable = base_gwei + current_prio_gwei
     max_fee_gwei = max(max_fee_gwei, min_viable)
 
     max_fee_wei  = int(w3.to_wei(max_fee_gwei, "gwei"))
-    prio_fee_wei = int(w3.to_wei(prio_gwei,    "gwei"))
+    prio_fee_wei = int(w3.to_wei(current_prio_gwei, "gwei"))
 
     logger.debug(
         f"Gas: base={base_gwei:.4f} gwei | "

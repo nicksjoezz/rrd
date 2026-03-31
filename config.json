@@ -22,7 +22,7 @@
       "liquidation_bonus_override": {}
     },
     "radiant": {
-      "enabled": false,
+      "enabled": true,
       "pool": "0xF4B1486DD74D07706052A33d31d7c0AAFD0659E1",
       "data_provider": "0x596B1b49645C4dAB4823BB5E2Be97C5ce4b09aeA",
       "addresses_provider": "0x091d52CacE1edc5527C99cDCFA6937C1635330E4",
@@ -122,6 +122,21 @@
       "address": "0xEC70Dcb4A1EFa46b8F2D97C310C9c4790ba5ffA8",
       "decimals": 18,
       "liquidation_bonus": 0.075
+    },
+    "LDO": {
+      "address": "0x13Ad51ed4F1B7e9Dc168d8a00cB3f4dDD85EfA60",
+      "decimals": 18,
+      "liquidation_bonus": 0.1
+    },
+    "GNS": {
+      "address": "0xe94327D485C6910999f17618992036991605A30c",
+      "decimals": 18,
+      "liquidation_bonus": 0.1
+    },
+    "PENDLE": {
+      "address": "0x0c880f6761F1af8d9Aa9C466984b80DAb9a8c9e8",
+      "decimals": 18,
+      "liquidation_bonus": 0.1
     }
   },
   "strategy": {

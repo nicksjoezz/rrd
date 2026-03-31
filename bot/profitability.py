@@ -94,7 +94,7 @@ def get_token_price_usd(token_address: str, force_fresh: bool = False) -> float:
                 data  = feed.functions.latestRoundData().call()
                 price = data[1] / 1e8  # Chainlink uses 8 decimals
                 if _price_cache.get(addr) != price:
-                    logger.debug(f"[PRICE] Chainlink: {sym} = ${price:,.2f}")
+                    logger.info(f"[PRICE] Chainlink: {sym} = ${price:,.2f}")
                 _price_cache[addr] = price
                 _price_cache_time[addr] = now
                 return price
@@ -112,7 +112,7 @@ def get_token_price_usd(token_address: str, force_fresh: bool = False) -> float:
             if price > 0:
                 sym = get_token_map().get(addr, {}).get("symbol", addr[:10])
                 if _price_cache.get(addr) != price:
-                    logger.debug(f"[PRICE] Aave Oracle: {sym} = ${price:,.2f}")
+                    logger.info(f"[PRICE] Aave Oracle: {sym} = ${price:,.2f}")
                 _price_cache[addr] = price
                 _price_cache_time[addr] = now
                 return price
@@ -123,7 +123,7 @@ def get_token_price_usd(token_address: str, force_fresh: bool = False) -> float:
         price = _get_coingecko_eth_price()
         if price > 0:
             if _price_cache.get(addr) != price:
-                logger.debug(f"[PRICE] CoinGecko: ETH = ${price:,.2f}")
+                logger.info(f"[PRICE] CoinGecko: ETH = ${price:,.2f}")
             _price_cache[addr] = price
             _price_cache_time[addr] = now
             return price
