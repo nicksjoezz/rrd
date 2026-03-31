@@ -187,6 +187,8 @@ class ProtocolMonitor:
             reserves_list = []
 
         # Universal asset support: iterate over ALL reserves in the pool
+        all_prices_available = True
+
         for i, addr in enumerate(reserves_list):
             # Check bitmask: index i corresponds to bits i*2 and i*2+1
             is_using = (config_bits >> (i * 2)) & 3
@@ -203,12 +205,15 @@ class ProtocolMonitor:
                 if col_bal == 0 and debt_bal == 0: continue
 
                 price = get_token_price_usd(addr)
+                if price <= 0:
+                    all_prices_available = False
 
                 config = self._get_reserve_config(addr)
-                if not config: continue
-                decimals = config["decimals"]
+                if not config:
+                    all_prices_available = False
+                    continue
 
-                # Try to get symbol for logging
+                decimals = config["decimals"]
                 sym = get_token_map().get(addr_l, {}).get("symbol", addr[:10])
 
                 if col_bal > 0:
@@ -217,8 +222,6 @@ class ProtocolMonitor:
                         total_fresh_weighted_col += usd_val * config["threshold"]
                         score = usd_val * (1 + config["bonus"]) if cfg("strategy", "prioritize_high_bonus") else usd_val
                     else:
-                        # We don't have a price, but we still need to pick a collateral
-                        # Score it as 1 to avoid crash but indicate presence
                         score = 1
 
                     if score > best_col_score:
@@ -238,7 +241,7 @@ class ProtocolMonitor:
                         best_debt = (addr, sym, debt_bal)
             except Exception: continue
 
-        if not best_col or not best_debt or total_fresh_debt == 0:
+        if not best_col or not best_debt or total_fresh_debt == 0 or not all_prices_available:
             # If we don't have enough data for a fresh HF, return tokens but no HF
             if best_col and best_debt:
                  return {

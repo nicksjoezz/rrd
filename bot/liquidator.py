@@ -268,7 +268,12 @@ class LiquidationExecutor:
             return None
 
         except Exception as e:
-            logger.info(f"[{protocol}] SIMULATION ERROR for {user[:8]}: {e}")
+            # Try to decode revert reason if possible
+            err_msg = str(e)
+            if "execution reverted" in err_msg.lower():
+                logger.info(f"[{protocol}] SIMULATION REVERTED for {user[:8]}: {err_msg}")
+            else:
+                logger.info(f"[{protocol}] SIMULATION ERROR for {user[:8]}: {e}")
             return None
 
     def _live_tx(self, tx: dict, position: dict, profit_info: dict) -> Optional[str]:
@@ -345,14 +350,13 @@ class LiquidationExecutor:
                     logger.info(f"[{protocol}] Skipping {user[:8]}... Position already repaid/closed")
                     return None
 
-                if fresh_hf > 1.0 and mode == "live":
-                    # In simulate mode we still might want to see it,
-                    # but in live we MUST skip if HF > 1.0
+                if fresh_hf > 1.0:
+                    # Log comparison for transparency
                     logger.info(
                         f"[{protocol}] Skipping {user[:8]}... Position healthy on-chain. "
                         f"Discovery HF: {position.get('health_factor',0):.4f} | Fresh On-chain HF: {fresh_hf:.4f}"
                     )
-                    return None
+                    if mode == "live": return None
 
                 # Update position object with latest on-chain data
                 position["health_factor"] = fresh_hf
@@ -384,6 +388,22 @@ class LiquidationExecutor:
         )
 
         try:
+            if mode == "live":
+                # Pre-flight check: simulate the actual transaction in LIVE mode
+                # This catches any complex reverts (e.g., protocol internal state)
+                # before we send a real tx and pay gas.
+                try:
+                    gas_params = get_gas_params(profit_info["estimated_profit_usd"])
+                    tx         = self._build_tx(position, gas_params)
+                    self._w3.eth.call({
+                        "from": self._account.address,
+                        "to":   self._contract.address,
+                        "data": tx["data"],
+                    })
+                except Exception as e:
+                    logger.info(f"[{protocol}] Pre-flight simulation failed for {user[:8]}: {e}")
+                    return None
+
             if mode == "simulate":
                 # In simulate mode, we can proceed even without a wallet/contract
                 # by doing a "Profit-only" simulation.
