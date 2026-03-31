@@ -303,10 +303,16 @@ def get_swap_fee(collateral_addr: str, debt_addr: str) -> int:
     a2s = get_address_to_symbol()
     col  = a2s.get(collateral_addr.lower(), "")
     debt = a2s.get(debt_addr.lower(), "")
-    fee_tiers = cfg("swap", "fee_tiers")
-    key1 = f"{col}-{debt}"
-    key2 = f"{debt}-{col}"
-    return fee_tiers.get(key1) or fee_tiers.get(key2) or cfg("swap", "default_fee_tier")
+
+    # Only try to look up keys if we actually have symbols
+    if col and debt:
+        fee_tiers = cfg("swap", "fee_tiers")
+        key1 = f"{col}-{debt}"
+        key2 = f"{debt}-{col}"
+        fee = fee_tiers.get(key1) or fee_tiers.get(key2)
+        if fee: return fee
+
+    return cfg("swap", "default_fee_tier")
 
 def checksum(addr: str) -> str:
     return Web3.to_checksum_address(addr)

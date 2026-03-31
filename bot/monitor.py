@@ -186,27 +186,13 @@ class ProtocolMonitor:
         except Exception:
             reserves_list = []
 
-        # -- Safety Check: Does the user have assets we DON'T know about? --
-        # If so, our local HF calculation will be wrong (too low), leading to HF=0.0000 bugs.
-        known_addresses = {info["address"].lower() for info in cfg("tokens").values()}
-        for i, res_addr in enumerate(reserves_list):
+        # Universal asset support: iterate over ALL reserves in the pool
+        for i, addr in enumerate(reserves_list):
+            # Check bitmask: index i corresponds to bits i*2 and i*2+1
             is_using = (config_bits >> (i * 2)) & 3
-            if is_using and res_addr.lower() not in known_addresses:
-                # User has an asset (collateral or debt) not in our config.
-                # Abort local calculation to avoid false positives.
-                return None
+            if not is_using: continue
 
-        tokens = cfg("tokens")
-        for sym, info in tokens.items():
-            addr = info["address"]
             addr_l = addr.lower()
-
-            # Check bitmask
-            if reserves_list and addr_l in [a.lower() for a in reserves_list]:
-                idx = [a.lower() for a in reserves_list].index(addr_l)
-                is_using = (config_bits >> (idx * 2)) & 3
-                if not is_using: continue
-
             try:
                 rd = self.data_provider.functions.getUserReserveData(
                     checksum(addr), checksum(user)
@@ -219,9 +205,11 @@ class ProtocolMonitor:
                 price = get_token_price_usd(addr)
 
                 config = self._get_reserve_config(addr)
-                if not config:
-                    config = {"decimals": info["decimals"], "threshold": 0.8, "bonus": info["liquidation_bonus"]}
+                if not config: continue
                 decimals = config["decimals"]
+
+                # Try to get symbol for logging
+                sym = get_token_map().get(addr_l, {}).get("symbol", addr[:10])
 
                 if col_bal > 0:
                     usd_val = (col_bal / 10**decimals) * price

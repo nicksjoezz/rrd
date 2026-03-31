@@ -152,13 +152,22 @@ def estimate_profit_usd(position: dict, force_fresh: bool = False) -> dict:
     col_info  = token_map.get(col_addr.lower())
     debt_info = token_map.get(debt_addr.lower())
 
-    if not col_info or not debt_info:
-        return {"profitable": False, "reason": "Unknown token pair"}
-
     # Raw debt amount (in token decimals)
     debt_amount_raw = position["debt_to_cover"]
-    debt_decimals   = debt_info["decimals"]
-    debt_amount     = debt_amount_raw / (10 ** debt_decimals)
+
+    # Use protocol metadata if not in config
+    if debt_info:
+        debt_decimals = debt_info["decimals"]
+    else:
+        # We need decimals to calculate amount. We can fetch them from the contract.
+        from .utils import ERC20_ABI
+        try:
+            tok = w3.eth.contract(address=checksum(debt_addr), abi=ERC20_ABI)
+            debt_decimals = tok.functions.decimals().call()
+        except Exception:
+            debt_decimals = 18 # Final fallback
+
+    debt_amount = debt_amount_raw / (10 ** debt_decimals)
 
     # USD values
     debt_price  = get_token_price_usd(debt_addr, force_fresh=force_fresh)
@@ -171,7 +180,13 @@ def estimate_profit_usd(position: dict, force_fresh: bool = False) -> dict:
     position["col_price"]  = col_price
 
     debt_usd          = debt_amount * debt_price
-    bonus_rate        = col_info["liquidation_bonus"]
+
+    if col_info:
+        bonus_rate = col_info["liquidation_bonus"]
+    else:
+        # Fetch bonus from position (which was populated from protocol metadata)
+        bonus_rate = position.get("collateral_bonus", 0.05)
+
     liquidation_bonus = debt_usd * bonus_rate
 
     # Slippage cost (swap collateral → debt token)
