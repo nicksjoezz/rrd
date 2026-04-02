@@ -1,0 +1,83 @@
+    def check_position(self, user: str, account_data: Optional[tuple] = None, force_fresh: bool = False) -> Optional[dict]:
+        """
+        Check a single user's health factor. Returns position dict if liquidatable
+        or approaching liquidation. Returns None if healthy.
+        """
+        try:
+            if account_data:
+                data = account_data
+            else:
+                data = self.pool.functions.getUserAccountData(checksum(user)).call()
+
+            total_col_base  = data[0]
+            total_debt_base = data[1]
+            hf_raw          = data[5]
+
+            if total_debt_base == 0: return None
+
+            # ── Real-Time Edge ──────────────────────────────────────────
+            hf = health_factor_float(hf_raw)
+            best_info = None
+
+            # Watch everything up to 1.15
+            if hf < 1.3:
+                best_info = self._get_best_tokens_and_fresh_hf(user, force_fresh=force_fresh)
+                if best_info: hf = best_info["fresh_hf"]
+
+            col_usd    = wei_to_usd_base(total_col_base)
+            debt_usd   = wei_to_usd_base(total_debt_base)
+            min_debt = cfg("strategy", "min_debt_usd")
+            max_debt = cfg("strategy", "max_debt_usd")
+
+            if debt_usd < min_debt or debt_usd > max_debt: return None
+
+            if hf > 1.15: return None
+
+            if not best_info:
+                best_info = self._get_best_tokens_and_fresh_hf(user)
+            if not best_info: return None
+
+            col_token    = best_info["col_token"]
+            col_symbol   = best_info["col_symbol"]
+            col_bonus    = best_info["col_bonus"]
+            debt_token   = best_info["debt_token"]
+            debt_symbol  = best_info["debt_symbol"]
+            debt_raw     = best_info["debt_raw"]
+
+            # Compatibility for real-time tracker keys
+            pos_out = {
+                "protocol":          self.name,
+                "user":              user,
+                "address":           user,
+                "collateral_token":  col_token,
+                "col_token":         col_token,
+                "collateral_symbol": col_symbol,
+                "col_symbol":        col_symbol,
+                "collateral_bonus":  col_bonus,
+                "col_bonus":         col_bonus,
+                "debt_token":        debt_token,
+                "debt_symbol":       debt_symbol,
+                "debt_to_cover":     0, # Placeholder
+                "health_factor":     hf,
+                "col_price":         best_info["col_price"],
+                "debt_price":        best_info["debt_price"],
+                "total_debt_usd":    debt_usd,
+                "total_col_usd":     col_usd,
+                "pool_address":      self.pool_addr,
+            }
+
+            # Close factor: 100% if hf < 0.95 OR position < $2k, else 50%
+            close_factor = cfg("strategy", "close_factor")
+            if hf < 0.95 or debt_usd < 2000:
+                close_factor = 1.0
+
+            debt_to_cover = int(debt_raw * close_factor)
+            pos_out["debt_to_cover"] = debt_to_cover
+
+            _, _, swap_params = get_best_swap(col_token, debt_token, debt_to_cover)
+            pos_out["swap_params"] = swap_params
+
+            return pos_out
+        except Exception as e:
+            logger.debug(f"[{self.name}] check_position error for {user[:8]}: {e}")
+            return None
