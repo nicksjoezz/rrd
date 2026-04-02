@@ -44,9 +44,12 @@ class JsonStore:
         """Atomic save to disk."""
         tmp_path = self.path.with_suffix(".tmp")
 
+        from decimal import Decimal
         def json_serial(obj):
             if isinstance(obj, bytes):
                 return "0x" + obj.hex()
+            if isinstance(obj, Decimal):
+                return float(obj)
             raise TypeError(f"Type {type(obj)} not serializable")
 
         try:

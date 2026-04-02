@@ -298,32 +298,40 @@ class ProtocolMonitor:
             debt_symbol  = best_info["debt_symbol"]
             debt_raw     = best_info["debt_raw"]
 
-            # Close factor: 100% if HF < 0.95 OR position < $2k, else 50%
+        # Compatibility for real-time tracker keys
+        pos_out = {
+            "protocol":          self.name,
+            "user":              user,
+            "address":           user,
+            "collateral_token":  col_token,
+            "col_token":         col_token,
+            "collateral_symbol": col_symbol,
+            "col_symbol":        col_symbol,
+            "collateral_bonus":  col_bonus,
+            "col_bonus":         col_bonus,
+            "debt_token":        debt_token,
+            "debt_symbol":       debt_symbol,
+            "debt_to_cover":     0, # Placeholder
+            "health_factor":     hf,
+            "col_price":         best_info["col_price"],
+            "debt_price":        best_info["debt_price"],
+            "total_debt_usd":    debt_usd,
+            "total_col_usd":     col_usd,
+            "pool_address":      self.pool_addr,
+        }
+
+        # Close factor: 100% if hf < 0.95 OR position < $2k, else 50%
             close_factor = cfg("strategy", "close_factor")
             if hf < 0.95 or debt_usd < 2000:
                 close_factor = 1.0
 
             debt_to_cover = int(debt_raw * close_factor)
-            _, _, swap_params = get_best_swap(col_token, debt_token, debt_to_cover)
+        pos_out["debt_to_cover"] = debt_to_cover
 
-            return {
-                "protocol":          self.name,
-                "user":              user,
-                "address":           user,
-                "collateral_token":  col_token,
-                "collateral_symbol": col_symbol,
-                "collateral_bonus":  col_bonus,
-                "debt_token":        debt_token,
-                "debt_symbol":       debt_symbol,
-                "debt_to_cover":     debt_to_cover,
-                "health_factor":     hf,
-                "col_price":         best_info["col_price"],
-                "debt_price":        best_info["debt_price"],
-                "total_debt_usd":    debt_usd,
-                "total_col_usd":     col_usd,
-                "pool_address":      self.pool_addr,
-                "swap_params":       swap_params,
-            }
+            _, _, swap_params = get_best_swap(col_token, debt_token, debt_to_cover)
+        pos_out["swap_params"] = swap_params
+
+        return pos_out
         except Exception as e:
             logger.debug(f"[{self.name}] check_position error for {user[:8]}: {e}")
             return None

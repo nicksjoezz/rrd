@@ -148,7 +148,7 @@
     "main_loop_interval_seconds": 20,
     "blocks_to_scan_for_borrowers": 1728000,
     "batch_size": 100,
-    "event_scan_chunk": 50000,
+    "event_scan_chunk": 10000,
     "use_websocket": false,
     "_note_arbitrum_blocks": "Arbitrum = ~4 blocks/sec. 1 day = 345600 blocks. 50 days = 17280000."
   },
@@ -157,7 +157,7 @@
     "chainlink_feeds": {
       "ETH_USD": "0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612",
       "BTC_USD": "0x6ce185860a4963106506C203335A2910413708e9",
-      "ARB_USD": "0xb2A824043730FE05F3DA2efaFa1CBbe83fa548D7",
+      "ARB_USD": "0xb2A824043730FE05F3DA2efaFa1CBbe83fa548D6",
       "LINK_USD": "0x86e53CF1B873786AC9cC2cE1d567A64D7609eE58",
       "GMX_USD": "0xDB98056FecFff59D032aB628337A4887110df3dB"
     },

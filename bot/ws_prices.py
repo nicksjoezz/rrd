@@ -60,27 +60,42 @@ class RealTimePriceStreamer:
         logger.info(f"[WS-PRICES] Connecting to WebSocket: {ws_url[:40]}...")
 
         try:
-            async with AsyncWeb3(AsyncWeb3.WebSocketProvider(ws_url)) as w3:
-                # Subscribe to logs from oracle feeds
-                sub_id = await w3.eth.subscribe("logs", {
-                    "address": [checksum(a) for a in feed_addrs],
-                    "topics":  [[ANSWER_UPDATED_SIG]]
-                })
+            # Using standard websockets for simplicity if AsyncWeb3 is tricky
+            import websockets
+            import json
+
+            async with websockets.connect(ws_url) as ws:
+                # Subscribe to logs
+                sub_req = {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "eth_subscribe",
+                    "params": ["logs", {
+                        "address": [checksum(a) for a in feed_addrs],
+                        "topics": [[ANSWER_UPDATED_SIG]]
+                    }]
+                }
+                await ws.send(json.dumps(sub_req))
                 logger.info(f"[WS-PRICES] Subscribed to {len(feed_addrs)} price feed(s)")
 
-                async for response in w3.socket.process_subscriptions():
-                    if not self._running: break
-                    event = response.get("result", {})
+                while self._running:
+                    msg = await ws.recv()
+                    res = json.loads(msg)
+                    if "params" not in res: continue
+
+                    event = res["params"]["result"]
                     if event:
                         feed_addr = event.get("address", "").lower()
                         token_addr = self._feed_to_token.get(feed_addr)
                         if not token_addr: continue
 
-                        # Data contains: current (int256), roundId (uint256), updatedAt (uint256)
-                        data_hex = event.get("data", "")
-                        if len(data_hex) >= 66:
+                        # AnswerUpdated(int256 current, uint256 roundId, uint256 updatedAt)
+                        # current is indexed (topics[1]), roundId is indexed (topics[2]),
+                        # updatedAt is NOT indexed (data).
+                        topics = event.get("topics", [])
+                        if len(topics) >= 2:
                             try:
-                                raw_price = int(data_hex[2:66], 16)
+                                raw_price = int(topics[1].hex() if isinstance(topics[1], bytes) else topics[1], 16)
                                 # Handle signed int (2s complement if negative)
                                 if raw_price > 2**255: raw_price -= 2**256
                                 price = raw_price / 1e8
@@ -96,8 +111,8 @@ class RealTimePriceStreamer:
 
     def start(self):
         ws_url = cfg("network", "rpc_ws")
-        if not ws_url or "YOUR" in ws_url:
-            logger.warning("[WS-PRICES] WebSocket URL not set -- real-time prices disabled")
+        if not ws_url or "YOUR" in ws_url or "arb1.arbitrum.io" in ws_url:
+            logger.warning(f"[WS-PRICES] WebSocket URL {ws_url} not supported for subscriptions -- real-time prices disabled")
             return
 
         self._thread = threading.Thread(

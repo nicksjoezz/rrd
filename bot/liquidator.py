@@ -390,7 +390,12 @@ class LiquidationExecutor:
                     return sim_id
 
                 # If we HAVE a contract, do the full eth_call simulation
-                gas_params = get_gas_params(profit_info["estimated_profit_usd"])
+                from .auto_tuner import get_tuner
+                rival_gas = None
+                if get_tuner().rival_gas_prices:
+                    rival_gas = sum(get_tuner().rival_gas_prices) / len(get_tuner().rival_gas_prices)
+
+                gas_params = get_gas_params(profit_info["estimated_profit_usd"], rival_gas_price_gwei=rival_gas)
                 tx         = self._build_tx(position, gas_params)
                 return self._simulate_tx(tx, position, profit_info)
 
@@ -399,7 +404,12 @@ class LiquidationExecutor:
                     logger.warning(f"[{protocol}] Skipping LIVE -- missing private_key or liquidator_contract")
                     return None
 
-                gas_params = get_gas_params(profit_info["estimated_profit_usd"])
+                from .auto_tuner import get_tuner
+                rival_gas = None
+                if get_tuner().rival_gas_prices:
+                    rival_gas = sum(get_tuner().rival_gas_prices) / len(get_tuner().rival_gas_prices)
+
+                gas_params = get_gas_params(profit_info["estimated_profit_usd"], rival_gas_price_gwei=rival_gas)
                 tx         = self._build_tx(position, gas_params)
                 return self._live_tx(tx, position, profit_info)
 
