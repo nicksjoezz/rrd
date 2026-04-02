@@ -469,20 +469,28 @@ class MultiProtocolMonitor:
 
                 monitor.load_borrowers_from_events(from_block, current_block, on_batch_found=_streaming_callback)
 
-    def refresh_borrowers(self):
+    def refresh_borrowers(self, hours: int = 1):
+        """Systematic deep scan for new borrowers (default every 1hr)."""
         try:
             w3 = get_web3()
             current_block = w3.eth.block_number
         except Exception: return
 
+        # Arbitrum is ~4 blocks per second. 1hr = 14400 blocks.
+        blocks_per_hr = 14400
+        lookback = hours * blocks_per_hr
+
         for name, monitor in self.monitors.items():
             last_block = get_last_scan_block(name)
-            from_block = (last_block + 1) if last_block > 0 else (current_block - 1000)
+            # Ensure we don't skip blocks, but also don't scan too far back if first run
+            from_block = (last_block + 1) if last_block > 0 else (current_block - lookback)
             
             if from_block < current_block:
+                logger.info(f"[{name}] Periodic borrower refresh: {from_block:,} -> {current_block:,}")
                 def _streaming_callback(proto_name, users):
                     m = self.monitors.get(proto_name)
                     if not m: return
+                    # Scan new borrowers immediately to see if they are at risk
                     found = m.scan_users(users, zombie_queue=self.zombie_queue)
                     if found:
                         liquidatable = [p for p in found if p.get("health_factor", 2.0) <= 1.0]
@@ -508,19 +516,10 @@ class MultiProtocolMonitor:
                     liquidatable.append(res)
         return liquidatable
 
-    def scan_all_protocols(self, hot_wallets: Optional[List[str]] = None) -> List[dict]:
+    def scan_all_protocols(self) -> List[dict]:
         all_liquidatable = []
 
-        # 1. Handle Hot Wallets (High Speed)
-        if hot_wallets:
-            for addr in hot_wallets:
-                for name, monitor in self.monitors.items():
-                    if addr.lower() in monitor._borrowers:
-                        pos = monitor.check_position(addr)
-                        if pos:
-                            all_liquidatable.append(pos)
-
-        # 2. Scan everything
+        # 1. Scan everything
         for name, monitor in self.monitors.items():
             try:
                 liquidatable = monitor.scan_all(zombie_queue=self.zombie_queue)

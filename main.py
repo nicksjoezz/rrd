@@ -72,7 +72,6 @@ def _bot_loop():
         from bot.gas_manager     import log_gas_summary, is_gas_spike
         from bot.risk_scorer     import rank_by_score
         from bot.auto_tuner      import get_tuner
-        from bot.ws_streamer     import WebSocketStreamer
         from bot.emode_detector  import flag_emode_risk_positions
 
         executor = LiquidationExecutor()
@@ -108,20 +107,6 @@ def _bot_loop():
             )
         )
 
-        # Real-time event streaming -- adds changed wallets to hotlist for
-        # immediate priority re-check rather than waiting for next cycle
-        def on_event(user_or_signal, protocol_or_feed):
-            if user_or_signal == "ORACLE_SIGNAL":
-                _emerg.set()
-            else:
-                # Standard wallet activity
-                with _bot_lock:
-                    if hasattr(streamer, '_hotlist'):
-                        with streamer._hotlist_lock:
-                            streamer._hotlist.add(user_or_signal)
-
-        streamer = WebSocketStreamer(on_position_changed=on_event)
-        streamer.start()
 
         # Load manually added/persistent zombies into monitors
         # We also need to add these to the monitor discovery list
@@ -180,18 +165,12 @@ def _bot_loop():
                 # Check oracle price feeds for large moves
                 oracle.check_all_feeds()
 
-                # Priority re-check wallets with recent on-chain activity
-                hot = streamer.get_and_clear_hotlist()
-                if hot:
-                    logger.info(f"[WS] {len(hot)} wallets had on-chain activity -- priority check")
-
                 # Main scan → rank → execute immediately if opportunities found
-                found = _scan_and_execute(monitor, executor, tuner, hot_wallets=hot)
+                found = _scan_and_execute(monitor, executor, tuner)
                 _bot_stats["positions_found"] = found
 
                 # High-frequency zombie scan
                 # If emergency set (oracle update), force fresh prices for zombie check
-                # Also reset emergency flag after use
                 is_emerg = _emerg.is_set()
                 if is_emerg: _emerg.clear()
 
@@ -204,8 +183,12 @@ def _bot_loop():
                 # Adaptive tuning every 50 cycles
                 tuner.tune()
 
-                # Refresh borrower list with new Borrow events
-                monitor.refresh_borrowers()
+                # Refresh borrower list every hour (deep scan)
+                if cycle % (3600 // tuner.get_effective_params()["scan_interval"]) == 0:
+                    monitor.refresh_borrowers(hours=1)
+                else:
+                    # Quick refresh for recent events every cycle
+                    monitor.refresh_borrowers(hours=0.01) # last ~1 minute
 
                 # Log cycle summary
                 db   = db_get_stats()
@@ -317,7 +300,7 @@ def _process_and_execute(positions, executor, tuner):
 
     return len(ranked)
 
-def _scan_and_execute(monitor, executor, tuner, emergency=False, hot_wallets=None):
+def _scan_and_execute(monitor, executor, tuner, emergency=False):
     """
     Full scan → score → filter → execute pipeline.
     Called every cycle AND immediately on oracle/mempool signals.
@@ -331,7 +314,7 @@ def _scan_and_execute(monitor, executor, tuner, emergency=False, hot_wallets=Non
         return 0
 
     # Scan all enabled protocols
-    positions = monitor.scan_all_protocols(hot_wallets=hot_wallets)
+    positions = monitor.scan_all_protocols()
     if not positions:
         logger.info("No positions near liquidation threshold")
         return 0

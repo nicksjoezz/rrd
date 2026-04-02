@@ -88,6 +88,35 @@ def get_best_swap(
         fee_direct = get_swap_fee(token_in, token_out)
         best_out   = 0
         best_route = "single"
+
+        # Local estimation (fallback/high-speed)
+        from .profitability import get_token_price_usd
+        price_in = get_token_price_usd(token_in)
+        price_out = get_token_price_usd(token_out)
+
+        from .utils import ERC20_ABI
+
+        token_map = get_token_map()
+
+        if token_in.lower() in token_map:
+            dec_in = token_map[token_in.lower()]["decimals"]
+        else:
+            try:
+                t = w3.eth.contract(address=checksum(token_in), abi=ERC20_ABI)
+                dec_in = t.functions.decimals().call()
+            except: dec_in = 18
+
+        if token_out.lower() in token_map:
+            dec_out = token_map[token_out.lower()]["decimals"]
+        else:
+            try:
+                t = w3.eth.contract(address=checksum(token_out), abi=ERC20_ABI)
+                dec_out = t.functions.decimals().call()
+            except: dec_out = 18
+
+        if price_in > 0 and price_out > 0:
+            best_out = int((amount_in / 10**dec_in) * price_in / price_out * 10**dec_out * 0.995) # 0.5% buffer
+
         best_params = {
             "route":    "single",
             "fee":      fee_direct,
@@ -96,48 +125,53 @@ def get_best_swap(
         }
 
         # ── Quote direct single-hop ───────────────────────────────────────────
-        try:
-            direct_out = quoter.functions.quoteExactInputSingle(
-                checksum(token_in),
-                checksum(token_out),
-                fee_direct,
-                amount_in,
-                0
-            ).call()
-            if direct_out > best_out:
-                best_out    = direct_out
-                best_route  = "single"
-                best_params = {
-                    "route":     "single",
-                    "fee":       fee_direct,
-                    "token_in":  token_in,
-                    "token_out": token_out,
-                    "amount_in": amount_in,
-                }
-        except Exception as e:
-            logger.debug(f"Direct quote failed {token_in[:8]}->{token_out[:8]}: {e}")
+        # Skip on-chain quote in LIVE mode if we have a local estimation to save time
+        import bot.liquidator as _liq
+        if _liq.get_mode() != "live":
+            try:
+                direct_out = quoter.functions.quoteExactInputSingle(
+                    checksum(token_in),
+                    checksum(token_out),
+                    fee_direct,
+                    amount_in,
+                    0
+                ).call()
+                if direct_out > best_out:
+                    best_out    = direct_out
+                    best_route  = "single"
+                    best_params = {
+                        "route":     "single",
+                        "fee":       fee_direct,
+                        "token_in":  token_in,
+                        "token_out": token_out,
+                        "amount_in": amount_in,
+                    }
+            except Exception as e:
+                logger.debug(f"Direct quote failed {token_in[:8]}->{token_out[:8]}: {e}")
 
         # ── Quote 2-hop via WETH ──────────────────────────────────────────────
         if token_in.lower() != WETH_ADDRESS.lower() and token_out.lower() != WETH_ADDRESS.lower():
             fee_in  = get_swap_fee(token_in, WETH_ADDRESS)
             fee_out = get_swap_fee(WETH_ADDRESS, token_out)
             path    = encode_path(token_in, fee_in, WETH_ADDRESS, fee_out, token_out)
-            try:
-                multi_out = quoter.functions.quoteExactInput(path, amount_in).call()
-                if multi_out > best_out * 1.001:  # only switch if 0.1%+ better
-                    best_out    = multi_out
-                    best_route  = "multi"
-                    best_params = {
-                        "route":     "multi",
-                        "path":      "0x" + path.hex(),
-                        "token_in":  token_in,
-                        "token_out": token_out,
-                        "amount_in": amount_in,
-                        "fee_in":    fee_in,
-                        "fee_out":   fee_out,
-                    }
-            except Exception as e:
-                logger.debug(f"Multi-hop quote failed: {e}")
+
+            if _liq.get_mode() != "live":
+                try:
+                    multi_out = quoter.functions.quoteExactInput(path, amount_in).call()
+                    if multi_out > best_out * 1.001:  # only switch if 0.1%+ better
+                        best_out    = multi_out
+                        best_route  = "multi"
+                        best_params = {
+                            "route":     "multi",
+                            "path":      "0x" + path.hex(),
+                            "token_in":  token_in,
+                            "token_out": token_out,
+                            "amount_in": amount_in,
+                            "fee_in":    fee_in,
+                            "fee_out":   fee_out,
+                        }
+                except Exception as e:
+                    logger.debug(f"Multi-hop quote failed: {e}")
 
         if best_out == 0:
             logger.warning(f"No swap quote found for {token_in[:8]}->{token_out[:8]}")

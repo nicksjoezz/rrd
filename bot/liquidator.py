@@ -414,7 +414,7 @@ class LiquidationExecutor:
             tx = self.execute(pos)
             if tx:
                 results.append(tx)
-            time.sleep(1)
+            # No delay between executions for maximum speed
         return results
 
     def withdraw_profits(self, token_address: str) -> Optional[str]:
