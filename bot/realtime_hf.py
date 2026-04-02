@@ -50,10 +50,15 @@ class RealTimeHFTracker:
         if not now_col_price or not now_debt_price: return None
 
         # HF = (Total Collateral USD * Threshold) / Total Debt USD
-        # New HF = Last HF * (New Col Price / Last Col Price) / (New Debt Price / Last Debt Price)
+        # If we have the used_threshold (which accounts for E-Mode), we can be more accurate.
+        # New HF = (Last Col USD * (Now Price / Last Price) * Threshold) / (Last Debt USD * (Now Price / Last Price))
+
         col_move = now_col_price / last_col_price
         debt_move = now_debt_price / last_debt_price
 
+        # We need the ratio of total values.
+        # Since we only track the price of the 'best' tokens, this is an approximation.
+        # But for liquidation triggers, the 'best' tokens usually represent the majority of the position.
         new_hf = last_hf * (col_move / debt_move)
         return new_hf
 

@@ -54,6 +54,7 @@ class ProtocolMonitor:
         self._last_scan_block  = 0
 
         w3 = get_web3()
+        self._w3 = w3
         self.pool = w3.eth.contract(
             address=checksum(pool_addr),
             abi=AAVE_POOL_ABI
@@ -145,7 +146,7 @@ class ProtocolMonitor:
             logger.warning(f"[{self.name}] Failed to fetch reserves list: {e}")
             reserves = [v['address'] for v in cfg("tokens").values()]
 
-        w3 = get_web3()
+        w3 = self._w3 if hasattr(self, '_w3') else get_web3()
         from .utils import ERC20_ABI
 
         for addr in reserves:
@@ -154,7 +155,11 @@ class ProtocolMonitor:
                 # Aave V3 ReserveConfigurationData: [0] decimals, [1] ltv, [2] threshold, [3] bonus...
                 res = self.data_provider.functions.getReserveConfigurationData(checksum(addr)).call()
 
-                # Fetch symbol for logging if not in config
+                # Fetch E-Mode category via bitmask in getConfiguration (Pool)
+                # Aave V3 ReserveConfiguration Bitmask: 168-175 is EMode Category
+                raw_res = self.pool.functions.getConfiguration(checksum(addr)).call()
+                emode_cat = (raw_res[0] >> 168) & 0xFF
+
                 sym = "???"
                 token_map = get_token_map()
                 if addr_l in token_map:
@@ -171,6 +176,7 @@ class ProtocolMonitor:
                     "ltv": res[1] / 10000,
                     "threshold": res[2] / 10000,
                     "bonus": (res[3] - 10000) / 10000 if res[3] > 10000 else 0,
+                    "emode_category": emode_cat
                 }
             except Exception as e:
                 logger.debug(f"[{self.name}] Reserve config fail for {addr[:10]}: {e}")
@@ -184,11 +190,30 @@ class ProtocolMonitor:
         if not self.data_provider: return None
         from .profitability import get_token_price_usd
 
-        w3 = get_web3()
+        w3 = self._w3 if hasattr(self, '_w3') else get_web3()
         mc = w3.eth.contract(address=MULTICALL3_ADDR, abi=MULTICALL3_ABI)
+
+        # ── E-Mode Awareness ──────────────────────────────────────────────────
+        user_emode = 0
+        emode_threshold = None
+        emode_bonus = None
+        try:
+            user_emode = self.pool.functions.getUserEMode(checksum(user)).call()
+            if user_emode > 0:
+                em_data = self.pool.functions.getEModeCategoryData(user_emode).call()
+                if isinstance(em_data, (list, tuple)) and len(em_data) > 0:
+                    if isinstance(em_data[0], (list, tuple)): em_data = em_data[0]
+                    emode_threshold = em_data[1] / 10000
+                    emode_bonus = (em_data[2] - 10000) / 10000
+        except Exception: pass
 
         # Use ALL detected protocol reserves (enables liquidating any token)
         token_list = list(self.reserve_configs.items()) # list of (addr_l, config)
+        if not token_list:
+            logger.info(f"[{self.name}] token_list is empty in _get_best_tokens_and_fresh_hf")
+            # Try to refresh if empty
+            self._refresh_reserve_configs()
+            token_list = list(self.reserve_configs.items())
         calls = []
         for addr_l, _ in token_list:
             call_data = self.data_provider.encodeABI("getUserReserveData", [checksum(addr_l), checksum(user)])
@@ -197,8 +222,15 @@ class ProtocolMonitor:
         try:
             _, return_data = mc.functions.aggregate(calls).call()
         except Exception as e:
-            logger.debug(f"[{self.name}] Multicall for user reserve data failed: {e}")
-            return None
+            logger.info(f"[{self.name}] Multicall for user reserve data failed: {e}")
+            # Fallback to individual calls if multicall fails (rare on Arbitrum)
+            return_data = []
+            for call in calls:
+                try:
+                    res = self._w3.eth.call({"to": call["target"], "data": call["callData"]})
+                    return_data.append(res)
+                except:
+                    return_data.append(b"")
 
         best_col_score = 0
         best_col = None
@@ -206,6 +238,7 @@ class ProtocolMonitor:
         best_debt = None
         total_fresh_weighted_col = 0
         total_fresh_debt = 0
+        missing_price = False
 
         for i, raw_res in enumerate(return_data):
             addr, config = token_list[i]
@@ -216,21 +249,33 @@ class ProtocolMonitor:
                 rd = w3.codec.decode(["uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint40", "bool"], raw_res)
 
                 col_bal = rd[0]
-                debt_bal = rd[2]
+                debt_bal = rd[1] + rd[2] # Total debt = stable + variable
                 if col_bal == 0 and debt_bal == 0: continue
 
+                logger.info(f"[{self.name}] User {user[:8]} has {sym}: col={col_bal}, debt={debt_bal}")
+
                 price = get_token_price_usd(addr, force_fresh=force_fresh)
-                if price == 0: continue
+                if price == 0:
+                    logger.info(f"[{self.name}] Price missing for {sym} ({addr}) - skipping fresh HF")
+                    missing_price = True
+                    continue
 
                 decimals = config["decimals"]
 
                 if col_bal > 0:
                     usd_val = (col_bal / 10**decimals) * price
-                    total_fresh_weighted_col += usd_val * config["threshold"]
-                    score = usd_val * (1 + config["bonus"]) if cfg("strategy", "prioritize_high_bonus") else usd_val
+
+                    threshold = config["threshold"]
+                    bonus     = config["bonus"]
+                    if user_emode > 0 and config["emode_category"] == user_emode:
+                        threshold = emode_threshold or threshold
+                        bonus     = emode_bonus if emode_bonus is not None else bonus
+
+                    total_fresh_weighted_col += usd_val * threshold
+                    score = usd_val * (1 + bonus) if cfg("strategy", "prioritize_high_bonus") else usd_val
                     if score > best_col_score:
                         best_col_score = score
-                        best_col = (addr, sym, config["bonus"])
+                        best_col = (addr, sym, bonus)
 
                 if debt_bal > 0:
                     usd_val = (debt_bal / 10**decimals) * price
@@ -240,16 +285,32 @@ class ProtocolMonitor:
                         best_debt = (addr, sym, debt_bal)
             except Exception: continue
 
-        if not best_col or not best_debt or total_fresh_debt == 0:
+        if missing_price or not best_col or not best_debt or total_fresh_debt == 0:
+            # If we miss ANY price for an asset the user holds, the local HF
+            # will be incorrect. Fall back to protocol HF.
             return None
 
         fresh_hf = total_fresh_weighted_col / total_fresh_debt
+        # Calculate the total USD value of all collateral assets (unweighted)
+        total_col_usd_unweighted = 0
+        for i, (addr, config) in enumerate(token_list):
+            rd = w3.codec.decode(["uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint40", "bool"], return_data[i])
+            if rd[0] > 0:
+                price = get_token_price_usd(addr)
+                total_col_usd_unweighted += (rd[0] / 10**config["decimals"]) * price
+
+        # We need the weighted average liquidation threshold to perform
+        # accurate local math in the real-time tracker.
+        # HF = (Total Collateral USD * Avg Threshold) / Total Debt USD
+        avg_threshold = total_fresh_weighted_col / total_col_usd_unweighted if total_col_usd_unweighted > 0 else 0
+
         return {
             "fresh_hf": fresh_hf,
             "col_token": best_col[0], "col_symbol": best_col[1], "col_bonus": best_col[2],
             "col_price": get_token_price_usd(best_col[0]),
             "debt_token": best_debt[0], "debt_symbol": best_debt[1], "debt_raw": best_debt[2],
-            "debt_price": get_token_price_usd(best_debt[0])
+            "debt_price": get_token_price_usd(best_debt[0]),
+            "used_threshold": avg_threshold
         }
 
     def check_position(self, user: str, account_data: Optional[tuple] = None, force_fresh: bool = False) -> Optional[dict]:
@@ -318,6 +379,7 @@ class ProtocolMonitor:
                 "total_debt_usd":    debt_usd,
                 "total_col_usd":     col_usd,
                 "pool_address":      self.pool_addr,
+                "used_threshold":    best_info.get("used_threshold"),
             }
 
             # Close factor: 100% if hf < 0.95 OR position < $2k, else 50%
