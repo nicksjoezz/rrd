@@ -152,7 +152,7 @@ class ProtocolMonitor:
             except Exception as e:
                 logger.debug(f"[{self.name}] Reserve config fail for {sym}: {e}")
 
-    def _get_best_tokens_and_fresh_hf(self, user: str):
+    def _get_best_tokens_and_fresh_hf(self, user: str, force_fresh: bool = False):
         """
         Calculates HF using fresh local prices and returns the best
         collateral/debt tokens for liquidation.
@@ -197,7 +197,7 @@ class ProtocolMonitor:
                 debt_bal = rd[2]
                 if col_bal == 0 and debt_bal == 0: continue
 
-                price = get_token_price_usd(addr)
+                price = get_token_price_usd(addr, force_fresh=force_fresh)
                 if price == 0: continue
 
                 config = self.reserve_configs.get(addr_l, {
@@ -231,7 +231,7 @@ class ProtocolMonitor:
             "debt_token": best_debt[0], "debt_symbol": best_debt[1], "debt_raw": best_debt[2]
         }
 
-    def check_position(self, user: str, account_data: Optional[tuple] = None) -> Optional[dict]:
+    def check_position(self, user: str, account_data: Optional[tuple] = None, force_fresh: bool = False) -> Optional[dict]:
         """
         Check a single user's health factor. Returns position dict if liquidatable
         or approaching liquidation. Returns None if healthy.
@@ -254,7 +254,7 @@ class ProtocolMonitor:
 
             # Watch everything up to 1.15
             if hf < 1.3:
-                best_info = self._get_best_tokens_and_fresh_hf(user)
+                best_info = self._get_best_tokens_and_fresh_hf(user, force_fresh=force_fresh)
                 if best_info: hf = best_info["fresh_hf"]
 
             col_usd    = wei_to_usd_base(total_col_base)
@@ -473,6 +473,21 @@ class MultiProtocolMonitor:
                             upsert_position(pos)
 
                 monitor.load_borrowers_from_events(from_block, current_block, on_batch_found=_streaming_callback)
+
+    def scan_zombies(self, force_fresh: bool = False):
+        """High-frequency scan of active users in the Zombie Queue."""
+        watching = self.zombie_queue.get_watching()
+        if not watching: return []
+
+        liquidatable = []
+        for pos in watching:
+            m = self.monitors.get(pos['protocol'])
+            if m:
+                # check_position already updates persistence and zombie queue
+                res = m.check_position(pos['user'], force_fresh=force_fresh)
+                if res and res.get('health_factor', 2.0) <= 1.0:
+                    liquidatable.append(res)
+        return liquidatable
 
     def scan_all_protocols(self, hot_wallets: Optional[List[str]] = None) -> List[dict]:
         all_liquidatable = []

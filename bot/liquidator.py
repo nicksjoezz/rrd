@@ -327,14 +327,21 @@ class LiquidationExecutor:
                     logger.info(f"[{protocol}] Skipping {user[:8]}... Position already repaid/closed")
                     return None
 
-                if fresh_hf > 1.0 and mode == "live":
-                    # In simulate mode we still might want to see it,
-                    # but in live we MUST skip if HF > 1.0
-                    logger.info(f"[{protocol}] Skipping {user[:8]}... Position recovered (HF={fresh_hf:.4f})")
+                # Fire on EITHER: protocol-reported HF < 1.0 OR our local refined HF < 1.0
+                # Our local HF (already in position dict) is often faster than protocol oracle updates.
+                local_hf = position.get("health_factor", 9.9)
+
+                if fresh_hf > 1.0 and local_hf > 1.0 and mode == "live":
+                    logger.info(f"[{protocol}] Skipping {user[:8]}... Position recovered (Protocol HF={fresh_hf:.4f}, Local HF={local_hf:.4f})")
                     return None
 
-                # Update position object with latest on-chain data
-                position["health_factor"] = fresh_hf
+                if fresh_hf > 1.0 and local_hf <= 1.0:
+                    logger.info(f"[{protocol}] Discrepancy detected! Protocol HF={fresh_hf:.4f} but Local HF={local_hf:.4f} -- FIRING ON LOCAL")
+
+                # Update position object with latest on-chain data (protocol-reported)
+                # But keep the lower one for the logs
+                position["protocol_hf"] = fresh_hf
+                position["health_factor"] = min(fresh_hf, local_hf)
         except Exception as e:
             logger.warning(f"[{protocol}] Pre-execution verification failed for {user[:8]}: {e}")
 

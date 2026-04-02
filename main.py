@@ -188,6 +188,17 @@ def _bot_loop():
                 # Main scan → rank → execute immediately if opportunities found
                 found = _scan_and_execute(monitor, executor, tuner, hot_wallets=hot)
                 _bot_stats["positions_found"] = found
+
+                # High-frequency zombie scan
+                # If emergency set (oracle update), force fresh prices for zombie check
+                # Also reset emergency flag after use
+                is_emerg = _emerg.is_set()
+                if is_emerg: _emerg.clear()
+
+                zombies_ready = monitor.scan_zombies(force_fresh=is_emerg)
+                if zombies_ready:
+                    logger.info(f"[ZOMBIE] {len(zombies_ready)} positions ready for liquidation")
+                    _process_and_execute(zombies_ready, executor, tuner)
                 _bot_stats["last_scan"] = time.strftime("%H:%M:%S")
 
                 # Adaptive tuning every 50 cycles

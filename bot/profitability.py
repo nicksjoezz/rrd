@@ -51,7 +51,7 @@ def _get_coingecko_eth_price() -> float:
         return price
     except Exception: return _cg_eth_cache
 
-def get_token_price_usd(token_address: str) -> float:
+def get_token_price_usd(token_address: str, force_fresh: bool = False) -> float:
     """
     Get token price in USD using Chainlink feeds.
     Falls back to on-chain Aave oracle pricing via base unit conversion.
@@ -60,10 +60,10 @@ def get_token_price_usd(token_address: str) -> float:
     w3   = get_web3()
     addr = token_address.lower()
 
-    # Use cached prices if same block
+    # Use cached prices if same block and not forced
     current_block = w3.eth.block_number
     global _price_cache, _price_cache_block
-    if current_block == _price_cache_block and addr in _price_cache:
+    if not force_fresh and current_block == _price_cache_block and addr in _price_cache:
         return _price_cache[addr]
 
     # Chainlink feed lookup

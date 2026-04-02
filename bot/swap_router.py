@@ -129,7 +129,7 @@ def get_best_swap(
                     best_route  = "multi"
                     best_params = {
                         "route":     "multi",
-                        "path":      path,
+                        "path":      "0x" + path.hex(),
                         "token_in":  token_in,
                         "token_out": token_out,
                         "amount_in": amount_in,
