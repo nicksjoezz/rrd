@@ -73,6 +73,7 @@ def _bot_loop():
         from bot.risk_scorer     import rank_by_score
         from bot.auto_tuner      import get_tuner
         from bot.emode_detector  import flag_emode_risk_positions
+        from bot.realtime_hf     import RealTimeHFTracker
 
         executor = LiquidationExecutor()
         tuner    = get_tuner()
@@ -106,6 +107,10 @@ def _bot_loop():
                 _emerg.set()
             )
         )
+
+        # Real-time HF tracker (uses WebSocket prices)
+        rt_hf = RealTimeHFTracker(executor)
+        rt_hf.start()
 
 
         # Load manually added/persistent zombies into monitors

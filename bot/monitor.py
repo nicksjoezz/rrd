@@ -247,7 +247,9 @@ class ProtocolMonitor:
         return {
             "fresh_hf": fresh_hf,
             "col_token": best_col[0], "col_symbol": best_col[1], "col_bonus": best_col[2],
-            "debt_token": best_debt[0], "debt_symbol": best_debt[1], "debt_raw": best_debt[2]
+            "col_price": get_token_price_usd(best_col[0]),
+            "debt_token": best_debt[0], "debt_symbol": best_debt[1], "debt_raw": best_debt[2],
+            "debt_price": get_token_price_usd(best_debt[0])
         }
 
     def check_position(self, user: str, account_data: Optional[tuple] = None, force_fresh: bool = False) -> Optional[dict]:
@@ -315,6 +317,8 @@ class ProtocolMonitor:
                 "debt_symbol":       debt_symbol,
                 "debt_to_cover":     debt_to_cover,
                 "health_factor":     hf,
+                "col_price":         best_info["col_price"],
+                "debt_price":        best_info["debt_price"],
                 "total_debt_usd":    debt_usd,
                 "total_col_usd":     col_usd,
                 "pool_address":      self.pool_addr,
