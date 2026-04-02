@@ -40,6 +40,7 @@ EVENT_SIGS = {
     "Supply":          Web3.keccak(text="Supply(address,address,address,uint256,uint16)").hex(),
     "Withdraw":        Web3.keccak(text="Withdraw(address,address,address,uint256)").hex(),
     "LiquidationCall": Web3.keccak(text="LiquidationCall(address,address,address,uint256,uint256,address,bool)").hex(),
+    "AnswerUpdated":   Web3.keccak(text="AnswerUpdated(int256,uint256,uint256)").hex(),
 }
 
 
@@ -71,6 +72,10 @@ class WebSocketStreamer:
             if pcfg.get("enabled") and pcfg.get("pool"):
                 self._protocol_pools[pcfg["pool"].lower()] = name
 
+        # Add Chainlink feed addresses for price update tracking
+        feeds = cfg("oracle", "chainlink_feeds")
+        self._oracle_feeds = {addr.lower(): name for name, addr in feeds.items()}
+
     def get_and_clear_hotlist(self) -> list:
         """
         Return wallets that had on-chain activity since last call.
@@ -84,14 +89,25 @@ class WebSocketStreamer:
     def _handle_log(self, event_log: dict):
         """Process a single event log — extract the affected user address."""
         try:
-            pool_addr = event_log.get("address", "").lower()
-            protocol  = self._protocol_pools.get(pool_addr, "unknown")
-            topic0    = event_log.get("topics", [None])[0]
+            emitter_addr = event_log.get("address", "").lower()
+            protocol     = self._protocol_pools.get(emitter_addr, "unknown")
+            topic0       = event_log.get("topics", [None])[0]
 
             if not topic0:
                 return
 
             topic0_hex = topic0.hex() if isinstance(topic0, bytes) else topic0
+
+            # ── Chainlink Oracle Update ─────────────────────────────────────
+            if topic0_hex == EVENT_SIGS["AnswerUpdated"] and emitter_addr in self._oracle_feeds:
+                feed_name = self._oracle_feeds[emitter_addr]
+                logger.info(f"[WS] 🔮 Oracle update: {feed_name} -- triggering emergency scan")
+                # Trigger emergency scan in main loop via global/shared flag or by
+                # returning a special value. For simplicity, we can use a callback.
+                if self._on_position_changed:
+                    # Special signal: "oracle" as address triggers emergency scan
+                    self._on_position_changed("ORACLE_SIGNAL", feed_name)
+                return
 
             # Aave V3 Event Parameter Mapping:
             # Borrow:          [sig, reserve(idx), onBehalfOf(idx), ref(idx)] | user(non-idx)
@@ -137,16 +153,19 @@ class WebSocketStreamer:
         """
         w3 = get_web3()
         pool_addrs = list(self._protocol_pools.keys())
-        if not pool_addrs:
+        feed_addrs = list(self._oracle_feeds.keys())
+        all_watch  = [checksum(a) for a in pool_addrs + feed_addrs]
+
+        if not all_watch:
             return
 
         logger.info("[WS] Starting HTTP event polling (WebSocket not configured)")
         self._running = True
 
         try:
-            # Create a filter for all tracked pool events
+            # Create a filter for all tracked pool events + oracle feeds
             event_filter = w3.eth.filter({
-                "address": [checksum(a) for a in pool_addrs],
+                "address": all_watch,
                 "topics":  [list(EVENT_SIGS.values())]
             })
         except Exception as e:
@@ -172,12 +191,14 @@ class WebSocketStreamer:
 
         from web3 import AsyncWeb3
         pool_addrs = list(self._protocol_pools.keys())
+        feed_addrs = list(self._oracle_feeds.keys())
+        all_watch  = [checksum(a) for a in pool_addrs + feed_addrs]
 
         try:
             async with AsyncWeb3(AsyncWeb3.WebSocketProvider(ws_url)) as w3:
-                # Subscribe to logs from all tracked pools
+                # Subscribe to logs from all tracked pools + oracle feeds
                 sub_id = await w3.eth.subscribe("logs", {
-                    "address": [checksum(a) for a in pool_addrs],
+                    "address": all_watch,
                     "topics":  [list(EVENT_SIGS.values())]
                 })
                 logger.info(f"[WS] Subscribed to {len(pool_addrs)} pool(s) | sub_id={sub_id}")

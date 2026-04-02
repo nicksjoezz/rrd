@@ -156,9 +156,26 @@ class ProtocolMonitor:
         """
         Calculates HF using fresh local prices and returns the best
         collateral/debt tokens for liquidation.
+        Uses Multicall to fetch all reserve data in one batch for high speed.
         """
         if not self.data_provider: return None
         from .profitability import get_token_price_usd
+
+        w3 = get_web3()
+        mc = w3.eth.contract(address=MULTICALL3_ADDR, abi=MULTICALL3_ABI)
+
+        tokens = cfg("tokens")
+        token_list = list(tokens.items())
+        calls = []
+        for sym, info in token_list:
+            call_data = self.data_provider.encodeABI("getUserReserveData", [checksum(info["address"]), checksum(user)])
+            calls.append({"target": self.data_provider.address, "callData": call_data})
+
+        try:
+            _, return_data = mc.functions.aggregate(calls).call()
+        except Exception as e:
+            logger.debug(f"[{self.name}] Multicall for user reserve data failed: {e}")
+            return None
 
         best_col_score = 0
         best_col = None
@@ -167,20 +184,21 @@ class ProtocolMonitor:
         total_fresh_weighted_col = 0
         total_fresh_debt = 0
 
-        tokens = cfg("tokens")
-        for sym, info in tokens.items():
+        for i, raw_res in enumerate(return_data):
+            sym, info = token_list[i]
             addr = info["address"]
             addr_l = addr.lower()
-            try:
-                rd = self.data_provider.functions.getUserReserveData(
-                    checksum(addr), checksum(user)
-                ).call()
 
-                col_bal = rd[0] # currentATokenBalance
-                debt_bal = rd[2] # currentVariableDebt
+            try:
+                # [0] currentATokenBalance, [1] currentStableDebt, [2] currentVariableDebt...
+                rd = w3.codec.decode(["uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint40", "bool"], raw_res)
+
+                col_bal = rd[0]
+                debt_bal = rd[2]
                 if col_bal == 0 and debt_bal == 0: continue
 
                 price = get_token_price_usd(addr)
+                if price == 0: continue
 
                 config = self.reserve_configs.get(addr_l, {
                     "decimals": info["decimals"], "threshold": 0.8, "bonus": info["liquidation_bonus"]
@@ -189,9 +207,6 @@ class ProtocolMonitor:
 
                 if col_bal > 0:
                     usd_val = (col_bal / 10**decimals) * price
-                    if price == 0:
-                        # Safety: If price discovery fails, do not proceed with 0.0000 HF
-                        return None
                     total_fresh_weighted_col += usd_val * config["threshold"]
                     score = usd_val * (1 + config["bonus"]) if cfg("strategy", "prioritize_high_bonus") else usd_val
                     if score > best_col_score:
@@ -200,9 +215,6 @@ class ProtocolMonitor:
 
                 if debt_bal > 0:
                     usd_val = (debt_bal / 10**decimals) * price
-                    if price == 0:
-                        # Safety: If price discovery fails, do not proceed with 0.0000 HF
-                        return None
                     total_fresh_debt += usd_val
                     if usd_val > best_debt_score:
                         best_debt_score = usd_val
@@ -462,10 +474,19 @@ class MultiProtocolMonitor:
 
                 monitor.load_borrowers_from_events(from_block, current_block, on_batch_found=_streaming_callback)
 
-    def scan_all_protocols(self) -> List[dict]:
+    def scan_all_protocols(self, hot_wallets: Optional[List[str]] = None) -> List[dict]:
         all_liquidatable = []
 
-        # 1. Scan everything
+        # 1. Handle Hot Wallets (High Speed)
+        if hot_wallets:
+            for addr in hot_wallets:
+                for name, monitor in self.monitors.items():
+                    if addr.lower() in monitor._borrowers:
+                        pos = monitor.check_position(addr)
+                        if pos:
+                            all_liquidatable.append(pos)
+
+        # 2. Scan everything
         for name, monitor in self.monitors.items():
             try:
                 liquidatable = monitor.scan_all(zombie_queue=self.zombie_queue)

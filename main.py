@@ -110,7 +110,17 @@ def _bot_loop():
 
         # Real-time event streaming -- adds changed wallets to hotlist for
         # immediate priority re-check rather than waiting for next cycle
-        streamer = WebSocketStreamer()
+        def on_event(user_or_signal, protocol_or_feed):
+            if user_or_signal == "ORACLE_SIGNAL":
+                _emerg.set()
+            else:
+                # Standard wallet activity
+                with _bot_lock:
+                    if hasattr(streamer, '_hotlist'):
+                        with streamer._hotlist_lock:
+                            streamer._hotlist.add(user_or_signal)
+
+        streamer = WebSocketStreamer(on_position_changed=on_event)
         streamer.start()
 
         # Load manually added/persistent zombies into monitors
@@ -176,7 +186,7 @@ def _bot_loop():
                     logger.info(f"[WS] {len(hot)} wallets had on-chain activity -- priority check")
 
                 # Main scan → rank → execute immediately if opportunities found
-                found = _scan_and_execute(monitor, executor, tuner)
+                found = _scan_and_execute(monitor, executor, tuner, hot_wallets=hot)
                 _bot_stats["positions_found"] = found
                 _bot_stats["last_scan"] = time.strftime("%H:%M:%S")
 
@@ -279,6 +289,7 @@ def _process_and_execute(positions, executor, tuner):
         )
 
     # Execute immediately — no delay between scan and execution
+    # Ensure gas params are ready BEFORE this loop for maximum speed
     results = executor.execute_batch(ranked)
 
     for pos in ranked[:len(results)]:
@@ -295,7 +306,7 @@ def _process_and_execute(positions, executor, tuner):
 
     return len(ranked)
 
-def _scan_and_execute(monitor, executor, tuner, emergency=False):
+def _scan_and_execute(monitor, executor, tuner, emergency=False, hot_wallets=None):
     """
     Full scan → score → filter → execute pipeline.
     Called every cycle AND immediately on oracle/mempool signals.
@@ -309,7 +320,7 @@ def _scan_and_execute(monitor, executor, tuner, emergency=False):
         return 0
 
     # Scan all enabled protocols
-    positions = monitor.scan_all_protocols()
+    positions = monitor.scan_all_protocols(hot_wallets=hot_wallets)
     if not positions:
         logger.info("No positions near liquidation threshold")
         return 0

@@ -39,6 +39,7 @@ class AutoTuner:
         self.gas_cap_gwei:      float = cfg("gas", "max_fee_per_gas_gwei")
         self.scan_interval:     int   = cfg("scanning", "main_loop_interval_seconds")
         self.collateral_skip:   set   = set()   # tokens with repeated swap failures
+        self.rival_gas_prices:  list  = []      # last N rival gas prices seen
 
         self._cycle_count:      int   = 0
         self._last_tune_cycle:  int   = 0
@@ -88,6 +89,13 @@ class AutoTuner:
         """Call when a liquidation tx reverts."""
         if "slippage" in reason.lower() or "insufficient" in reason.lower():
             logger.info("[TUNER] Swap slippage revert -- noting for parameter review")
+
+    def record_rival_gas(self, gas_gwei: float):
+        """Call when we lose to a rival to track their bidding patterns."""
+        self.rival_gas_prices.append(gas_gwei)
+        if len(self.rival_gas_prices) > 20:
+            self.rival_gas_prices.pop(0)
+        logger.info(f"[TUNER] Recorded rival gas: {gas_gwei:.2f} gwei (avg of last {len(self.rival_gas_prices)}: {sum(self.rival_gas_prices)/len(self.rival_gas_prices):.2f})")
 
     def should_tune(self) -> bool:
         return (self._cycle_count - self._last_tune_cycle) >= self._tune_every
@@ -161,16 +169,29 @@ class AutoTuner:
         try:
             current_base = get_current_base_fee() / 1e9  # gwei
             
+            # If we've seen rivals recently, use their average + buffer
+            if self.rival_gas_prices:
+                avg_rival = sum(self.rival_gas_prices) / len(self.rival_gas_prices)
+                if avg_rival > self.gas_cap_gwei * 0.9:
+                    new_cap = min(config_max * 5, avg_rival * 1.5)
+                    if new_cap > self.gas_cap_gwei:
+                        logger.info(
+                            f"[TUNER] ↑ gas_cap: {self.gas_cap_gwei:.3f} → {new_cap:.3f} gwei "
+                            f"(rivals seen bidding at {avg_rival:.3f} avg)"
+                        )
+                        self.gas_cap_gwei = new_cap
+                        return
+
             # If base fee > 80% of our cap, we're cutting it close
             if current_base > self.gas_cap_gwei * 0.8:
-                new_cap = min(config_max * 2, current_base * 2.0)
+                new_cap = min(config_max * 3, current_base * 2.0)
                 if new_cap > self.gas_cap_gwei:
                     logger.info(
                         f"[TUNER] ↑ gas_cap: {self.gas_cap_gwei:.3f} → {new_cap:.3f} gwei "
                         f"(base fee at {current_base:.3f} gwei)"
                     )
                     self.gas_cap_gwei = new_cap
-            elif current_base < self.gas_cap_gwei * 0.2:
+            elif current_base < self.gas_cap_gwei * 0.2 and not self.rival_gas_prices:
                 # Very cheap gas — we can lower cap to save margin
                 new_cap = max(config_max * 0.5, current_base * 3.0)
                 if new_cap < self.gas_cap_gwei:
