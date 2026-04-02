@@ -18,7 +18,7 @@ Edge: Better swap execution = more profit captured per liquidation.
 import logging
 from web3 import Web3
 from typing import Optional, Tuple
-from .utils import get_web3, cfg, checksum, get_swap_fee
+from .utils import get_web3, cfg, checksum, get_swap_fee, get_token_map
 
 logger = logging.getLogger("liquidation_bot.swap")
 
