@@ -135,22 +135,45 @@ class ProtocolMonitor:
             logger.info(f"[{self.name}] +{added} new borrowers (total: {len(self._borrowers):,})")
 
     def _refresh_reserve_configs(self):
-        """Fetch and cache decimals and liquidation thresholds for all supported tokens."""
+        """Fetch and cache decimals and liquidation thresholds for ALL protocol reserves."""
         if not self.data_provider: return
-        tokens = cfg("tokens")
-        for sym, info in tokens.items():
-            addr = checksum(info["address"])
+
+        try:
+            reserves = self.pool.functions.getReservesList().call()
+            logger.info(f"[{self.name}] Detected {len(reserves)} protocol reserves")
+        except Exception as e:
+            logger.warning(f"[{self.name}] Failed to fetch reserves list: {e}")
+            reserves = [v['address'] for v in cfg("tokens").values()]
+
+        w3 = get_web3()
+        from .utils import ERC20_ABI
+
+        for addr in reserves:
+            addr_l = addr.lower()
             try:
                 # Aave V3 ReserveConfigurationData: [0] decimals, [1] ltv, [2] threshold, [3] bonus...
-                res = self.data_provider.functions.getReserveConfigurationData(addr).call()
-                self.reserve_configs[addr.lower()] = {
+                res = self.data_provider.functions.getReserveConfigurationData(checksum(addr)).call()
+
+                # Fetch symbol for logging if not in config
+                sym = "???"
+                token_map = get_token_map()
+                if addr_l in token_map:
+                    sym = token_map[addr_l]["symbol"]
+                else:
+                    try:
+                        t = w3.eth.contract(address=checksum(addr), abi=ERC20_ABI)
+                        sym = t.functions.symbol().call()
+                    except: pass
+
+                self.reserve_configs[addr_l] = {
+                    "symbol": sym,
                     "decimals": res[0],
                     "ltv": res[1] / 10000,
                     "threshold": res[2] / 10000,
                     "bonus": (res[3] - 10000) / 10000 if res[3] > 10000 else 0,
                 }
             except Exception as e:
-                logger.debug(f"[{self.name}] Reserve config fail for {sym}: {e}")
+                logger.debug(f"[{self.name}] Reserve config fail for {addr[:10]}: {e}")
 
     def _get_best_tokens_and_fresh_hf(self, user: str, force_fresh: bool = False):
         """
@@ -164,11 +187,11 @@ class ProtocolMonitor:
         w3 = get_web3()
         mc = w3.eth.contract(address=MULTICALL3_ADDR, abi=MULTICALL3_ABI)
 
-        tokens = cfg("tokens")
-        token_list = list(tokens.items())
+        # Use ALL detected protocol reserves (enables liquidating any token)
+        token_list = list(self.reserve_configs.items()) # list of (addr_l, config)
         calls = []
-        for sym, info in token_list:
-            call_data = self.data_provider.encodeABI("getUserReserveData", [checksum(info["address"]), checksum(user)])
+        for addr_l, _ in token_list:
+            call_data = self.data_provider.encodeABI("getUserReserveData", [checksum(addr_l), checksum(user)])
             calls.append({"target": self.data_provider.address, "callData": call_data})
 
         try:
@@ -185,9 +208,8 @@ class ProtocolMonitor:
         total_fresh_debt = 0
 
         for i, raw_res in enumerate(return_data):
-            sym, info = token_list[i]
-            addr = info["address"]
-            addr_l = addr.lower()
+            addr, config = token_list[i]
+            sym = config.get("symbol", "???")
 
             try:
                 # [0] currentATokenBalance, [1] currentStableDebt, [2] currentVariableDebt...
@@ -200,9 +222,6 @@ class ProtocolMonitor:
                 price = get_token_price_usd(addr, force_fresh=force_fresh)
                 if price == 0: continue
 
-                config = self.reserve_configs.get(addr_l, {
-                    "decimals": info["decimals"], "threshold": 0.8, "bonus": info["liquidation_bonus"]
-                })
                 decimals = config["decimals"]
 
                 if col_bal > 0:

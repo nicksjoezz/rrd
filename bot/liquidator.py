@@ -312,38 +312,39 @@ class LiquidationExecutor:
         user     = position["user"]
 
         # ── Final On-Chain Verification ──────────────────────────────────────
-        # Confirm position is still open and liquidatable immediately before fire
-        try:
-            pool_addr = position.get("pool_address")
-            if pool_addr:
-                from .utils import AAVE_POOL_ABI, health_factor_float
-                pool = self._w3.eth.contract(address=checksum(pool_addr), abi=AAVE_POOL_ABI)
-                data = pool.functions.getUserAccountData(checksum(user)).call()
+        # High-Speed Optimization: Skip pre-flight check in LIVE mode to avoid RPC latency
+        if mode == "simulate":
+            try:
+                pool_addr = position.get("pool_address")
+                if pool_addr:
+                    from .utils import AAVE_POOL_ABI, health_factor_float
+                    pool = self._w3.eth.contract(address=checksum(pool_addr), abi=AAVE_POOL_ABI)
+                    data = pool.functions.getUserAccountData(checksum(user)).call()
 
-                fresh_hf = health_factor_float(data[5])
-                total_debt = data[1]
+                    fresh_hf = health_factor_float(data[5])
+                    total_debt = data[1]
 
-                if total_debt == 0:
-                    logger.info(f"[{protocol}] Skipping {user[:8]}... Position already repaid/closed")
-                    return None
+                    if total_debt == 0:
+                        logger.info(f"[{protocol}] Skipping {user[:8]}... Position already repaid/closed")
+                        return None
 
-                # Fire on EITHER: protocol-reported HF < 1.0 OR our local refined HF < 1.0
-                # Our local HF (already in position dict) is often faster than protocol oracle updates.
-                local_hf = position.get("health_factor", 9.9)
+                    # Fire on EITHER: protocol-reported HF < 1.0 OR our local refined HF < 1.0
+                    local_hf = position.get("health_factor", 9.9)
 
-                if fresh_hf > 1.0 and local_hf > 1.0 and mode == "live":
-                    logger.info(f"[{protocol}] Skipping {user[:8]}... Position recovered (Protocol HF={fresh_hf:.4f}, Local HF={local_hf:.4f})")
-                    return None
+                    if fresh_hf > 1.0 and local_hf > 1.0:
+                        logger.info(f"[{protocol}] Skipping {user[:8]}... Position recovered (Protocol HF={fresh_hf:.4f}, Local HF={local_hf:.4f})")
+                        return None
 
-                if fresh_hf > 1.0 and local_hf <= 1.0:
-                    logger.info(f"[{protocol}] Discrepancy detected! Protocol HF={fresh_hf:.4f} but Local HF={local_hf:.4f} -- FIRING ON LOCAL")
+                    if fresh_hf > 1.0 and local_hf <= 1.0:
+                        logger.info(f"[{protocol}] Discrepancy detected! Protocol HF={fresh_hf:.4f} but Local HF={local_hf:.4f}")
 
-                # Update position object with latest on-chain data (protocol-reported)
-                # But keep the lower one for the logs
-                position["protocol_hf"] = fresh_hf
-                position["health_factor"] = min(fresh_hf, local_hf)
-        except Exception as e:
-            logger.warning(f"[{protocol}] Pre-execution verification failed for {user[:8]}: {e}")
+                    # Update position object for logs
+                    position["protocol_hf"] = fresh_hf
+                    position["health_factor"] = min(fresh_hf, local_hf)
+            except Exception as e:
+                logger.warning(f"[{protocol}] Simulation verification failed for {user[:8]}: {e}")
+        else:
+            logger.info(f"[{protocol}] [LIVE] Bypassing pre-flight verification for maximum speed")
 
         # Profitability check (runs in both modes)
         profit_info = estimate_profit_usd(position)
