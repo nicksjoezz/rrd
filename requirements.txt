@@ -9,3 +9,4 @@ gevent-websocket==0.10.1
 requests==2.31.0
 aiohttp==3.9.3
 colorlog==6.8.2
+
