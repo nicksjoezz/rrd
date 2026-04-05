@@ -2,13 +2,13 @@ import logging
 import time
 from typing import Optional
 from web3 import Web3
-
 from .utils import (
     get_web3, get_account, cfg, checksum,
     logger, notify
 )
+from .database import record_execution
+from .arb_math import calculate_optimal_input
 
-# New ABI for FlashLoanArbitrage.sol
 ARB_CONTRACT_ABI = [
   {"name":"executeArb","type":"function","stateMutability":"nonpayable",
    "inputs":[
@@ -38,11 +38,11 @@ class ArbExecutor:
     def __init__(self):
         self._w3      = get_web3()
         self._account = get_account()
-        contract_addr = cfg("wallet", "liquidator_contract") # Use same key for now
+        contract_addr = cfg("wallet", "arb_contract")
 
         if not contract_addr or contract_addr == "DEPLOY_CONTRACT_ADDRESS_HERE":
             self._contract = None
-            logger.warning("liquidator_contract (arb) not set -- execution will be disabled")
+            logger.warning("arb_contract not set -- execution will be disabled")
         else:
             self._contract = self._w3.eth.contract(
                 address=checksum(contract_addr),
@@ -65,7 +65,7 @@ class ArbExecutor:
         flash_pool = opportunity["univ3Pool"]
         token_x = opportunity["token"]
         token_usdc = cfg("tokens", "USDC", "address")
-        uni_v3_fee = 500 # Assume 0.05% for now, or fetch from config/pair
+        uni_v3_fee = 500 # Assume 0.05% for now
 
         nonce = self._w3.eth.get_transaction_count(self._account.address)
 
@@ -91,8 +91,12 @@ class ArbExecutor:
         token_usdc_addr = cfg("tokens", "USDC", "address")
         token_usdc_decimals = cfg("tokens", "USDC", "decimals")
 
-        # Use simple optimal calculation or default for now
-        amount_usd = 200 # Fixed $200 for now
+        # Calculate optimal amount based on liquidity and price gap
+        liquidity = opportunity.get("liquidity", 1000)
+        p_u = opportunity["u_price"]
+        p_c = opportunity["c_price"]
+
+        amount_usd = calculate_optimal_input(liquidity, p_u, p_c)
         amount_usdc_wei = int(amount_usd * (10 ** token_usdc_decimals))
         min_profit_usd = cfg("strategy", "min_profit_usd")
         min_profit_wei = int(min_profit_usd * (10 ** token_usdc_decimals))
@@ -105,9 +109,18 @@ class ArbExecutor:
 
         try:
             if mode == "simulate":
-                # Alchemy call() is free and acts as a Dry Run
                 self._w3.eth.call(tx)
                 logger.info(f"[SIMULATE] [SUCCESS] Arbitrage simulation passed for {opportunity['symbol']}!")
+
+                record_execution({
+                    "tx_hash": f"sim-{int(time.time())}-{opportunity['symbol']}",
+                    "token": opportunity["token"],
+                    "symbol": opportunity["symbol"],
+                    "univ3Pool": opportunity["univ3Pool"],
+                    "camelotPool": opportunity["camelotPool"],
+                    "estimated_profit": min_profit_usd,
+                    "timestamp": int(time.time())
+                })
                 return "sim-success"
             else:
                 signed = self._account.sign_transaction(tx)
@@ -116,6 +129,15 @@ class ArbExecutor:
                 receipt = self._w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
                 if receipt.status == 1:
                     logger.info(f"[LIVE] SUCCESS! Arbitrage completed. TX: {tx_hash.hex()}")
+                    record_execution({
+                        "tx_hash": tx_hash.hex(),
+                        "token": opportunity["token"],
+                        "symbol": opportunity["symbol"],
+                        "univ3Pool": opportunity["univ3Pool"],
+                        "camelotPool": opportunity["camelotPool"],
+                        "estimated_profit": min_profit_usd,
+                        "timestamp": int(time.time())
+                    })
                     notify(f"Arbitrage SUCCESS! Token: {opportunity['symbol']}\nTX: {tx_hash.hex()}")
                     return tx_hash.hex()
                 else:

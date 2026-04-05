@@ -97,7 +97,7 @@
 <!-- Recent liquidations -->
 <div class="card animate-in">
   <div class="card-header">
-    <div class="card-title"><span class="dot"></span> Recent Liquidations</div>
+    <div class="card-title"><span class="dot"></span> Recent Arbitrages</div>
     <span class="live-tag">LIVE</span>
   </div>
   <div class="card-body" style="padding:0">
@@ -105,12 +105,12 @@
       <table class="data-table" id="recent-tbl">
       <thead>
         <tr>
-          <th>TIME</th><th>BORROWER</th><th>PROTOCOL</th>
-          <th>COLLATERAL</th><th>DEBT USD</th><th>EST. PROFIT</th><th>TX</th>
+          <th>TIME</th><th>TOKEN</th><th>SYMBOL</th>
+          <th>UNI POOL</th><th>CAMELOT</th><th>EST. PROFIT</th><th>TX</th>
         </tr>
       </thead>
       <tbody id="recent-body">
-        <tr><td colspan="7" class="dim" style="text-align:center;padding:24px">No liquidations yet</td></tr>
+        <tr><td colspan="7" class="dim" style="text-align:center;padding:24px">No arbitrages yet</td></tr>
       </tbody>
     </table>
     </div>
@@ -143,10 +143,10 @@ function onStats(d) {
       const simBadge = isSim ? '<span class="sim-tag">[SIM]</span> ' : '';
       return `<tr class="${isSim ? 'sim-row' : ''}">
         <td class="dim">${ts}</td>
-        <td class="mono cyan">${fmtAddr(r.borrower)}</td>
-        <td><span class="badge badge-cyan">${r.protocol||'—'}</span></td>
-        <td class="amber">${(r.collateral_token||'').slice(0,8)}</td>
-        <td>${fmtUSD(r.debt_covered_usd)}</td>
+        <td class="mono cyan">${fmtAddr(r.token)}</td>
+        <td class="amber">${r.symbol}</td>
+        <td class="mono dim">${fmtAddr(r.univ3Pool)}</td>
+        <td class="mono dim">${fmtAddr(r.camelotPool)}</td>
         <td class="${pColor}">${simBadge}${fmtUSD(profit)}</td>
         <td class="dim" style="font-size:9px">${tx}</td>
       </tr>`;

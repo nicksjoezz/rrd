@@ -1,27 +1,24 @@
-import requests
+import httpx
 import json
 import time
 import logging
+import asyncio
 from .utils import ROOT_DIR, logger
 
 WATCHLIST_PATH = ROOT_DIR / "logs" / "watchlist.json"
 
-def fetch_small_caps():
+async def fetch_small_caps():
     """Fetch tokens from DexScreener for Arbitrum."""
     try:
-        # DexScreener doesn't have a simple "all tokens" API, but we can search for Arbitrum pairs
-        # or use their 'tokens' endpoint if we have addresses.
-        # For a general scout, we might want to use their "latest" or "search" endpoint.
-        # Alternatively, use a more suitable API for discovery if DexScreener is limited.
-        # Let's try searching for Arbitrum pairs.
         url = "https://api.dexscreener.com/latest/dex/search/?q=arbitrum"
-        response = requests.get(url, timeout=10)
-        if response.status_code != 200:
-            logger.error(f"DexScreener API error: {response.status_code}")
-            return []
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=15)
+            if response.status_code != 200:
+                logger.error(f"DexScreener API error: {response.status_code}")
+                return []
 
-        data = response.json()
-        return data.get("pairs", [])
+            data = response.json()
+            return data.get("pairs", [])
     except Exception as e:
         logger.error(f"Error fetching tokens from DexScreener: {e}")
         return []
@@ -83,9 +80,9 @@ def filter_tokens(pairs):
 
     return filtered
 
-def update_watchlist():
+async def update_watchlist():
     logger.info("Scouting for arbitrage-ready tokens...")
-    pairs = fetch_small_caps()
+    pairs = await fetch_small_caps()
     watchlist = filter_tokens(pairs)
 
     with open(WATCHLIST_PATH, "w") as f:
@@ -95,4 +92,4 @@ def update_watchlist():
     return watchlist
 
 if __name__ == "__main__":
-    update_watchlist()
+    asyncio.run(update_watchlist())

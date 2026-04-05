@@ -88,7 +88,7 @@ async def _bot_loop():
 
 async def _scout_loop():
     while _bot_running.is_set():
-        update_watchlist()
+        await update_watchlist()
         await asyncio.sleep(1800) # Every 30 mins
 
 # ── Pages ─────────────────────────────────────────────────────────────────────
@@ -130,7 +130,7 @@ def api_bot_status():
         "cycle":     _bot_stats["cycle"],
         "last_scan": _bot_stats["last_scan"],
         "network":   c.get("network", {}).get("chain_name", "Arbitrum One"),
-        "contract":  (c.get("wallet", {}).get("liquidator_contract", "") or "")[:10] + "...",
+        "contract":  (c.get("wallet", {}).get("arb_contract", "") or "")[:10] + "...",
     })
 
 @app.route("/api/bot/start", methods=["POST"])
