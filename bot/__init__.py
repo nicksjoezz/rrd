@@ -10,8 +10,6 @@ Core pipeline:
 
 Infrastructure:
   database         JSON persistence: watchlist, history, stats
-  gas_manager      dynamic gas pricing
-  auto_tuner       adaptive parameter adjustment
 """
 from .utils              import load_config, setup_logging, get_web3, get_account
 from .arb_monitor        import ArbMonitor
@@ -19,5 +17,3 @@ from .executor           import ArbExecutor
 from .scout              import update_watchlist
 from .arb_math           import calculate_optimal_input
 from .database           import get_stats, init_db
-from .gas_manager        import get_gas_params, is_gas_spike, log_gas_summary
-from .auto_tuner         import get_tuner, AutoTuner
