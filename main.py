@@ -1,19 +1,10 @@
 """
-main.py -- LiqBot: Arbitrum Flash Loan Liquidation Bot
+main.py -- ArbBot: Hybrid Sentinel Arbitrage Bot
 
-Single entry point. Starts Flask dashboard + bot scan engine together.
-The bot runs 24/7 in a background thread, scanning for liquidation
-opportunities and executing them immediately when found.
-
-    python main.py              start everything (port 5000)
-    python main.py --port 8080  custom port
-    python main.py --no-bot     UI only -- start bot via dashboard button
-
-For a terminal opportunity snapshot:
-    python scan_test.py
+Single entry point. Starts Flask dashboard + arb scan engine.
 """
 
-import os, sys, time, json, logging, argparse, threading
+import os, sys, time, json, logging, argparse, threading, asyncio
 from pathlib import Path
 
 from flask import Flask, render_template, jsonify, request
@@ -24,8 +15,11 @@ sys.path.insert(0, str(ROOT))
 
 from bot.utils    import load_config, get_web3, get_account, cfg, logger, notify
 from bot.database import (
-    get_stats as db_get_stats, get_approaching_positions, init_db
+    get_stats as db_get_stats, init_db
 )
+from bot.scout    import update_watchlist
+from bot.arb_monitor import ArbMonitor
+from bot.executor import ArbExecutor
 
 # -- Flask app -----------------------------------------------------------------
 app = Flask(__name__, template_folder=str(ROOT / "templates"))
@@ -38,7 +32,7 @@ LOG_PATH.parent.mkdir(exist_ok=True)
 # ── Bot engine state ──────────────────────────────────────────────────────────
 _bot_running  = threading.Event()
 _bot_lock     = threading.Lock()
-_bot_stats    = {"cycle": 0, "last_scan": None, "positions_found": 0}
+_bot_stats    = {"cycle": 0, "last_scan": None, "tokens_found": 0}
 
 def bot_is_running():
     return _bot_running.is_set()
@@ -48,9 +42,8 @@ def start_bot_engine():
         if bot_is_running():
             return False
         _bot_running.set()
-        threading.Thread(target=_bot_loop, daemon=True, name="bot-engine").start()
-        # discovery_loop is now unified into bot_loop to ensure immediate execution
-        logger.info("Bot engine started -- scanning 24/7")
+        threading.Thread(target=_bot_loop_wrapper, daemon=True, name="bot-engine").start()
+        logger.info("Arb bot engine started")
         return True
 
 def stop_bot_engine():
@@ -61,164 +54,31 @@ def stop_bot_engine():
         logger.info("Bot engine stopping...")
         return True
 
-# ── 1. Real-Time Monitor & Executor Loop ──────────────────────────────────────
-def _bot_loop():
+def _bot_loop_wrapper():
+    asyncio.run(_bot_loop())
+
+async def _bot_loop():
     try:
-        from bot.monitor         import MultiProtocolMonitor
-        from bot.liquidator      import LiquidationExecutor
-        from bot.profitability   import rank_positions
-        from bot.oracle_watcher  import OracleWatcher
-        from bot.mempool_watcher import start_mempool_watcher_thread
-        from bot.gas_manager     import log_gas_summary, is_gas_spike
-        from bot.risk_scorer     import rank_by_score
-        from bot.auto_tuner      import get_tuner
-        from bot.emode_detector  import flag_emode_risk_positions
-        from bot.realtime_hf     import RealTimeHFTracker
+        executor = ArbExecutor()
 
-        executor = LiquidationExecutor()
-        tuner    = get_tuner()
+        async def on_opportunity(opp):
+            logger.info(f"Opportunity found: {opp['symbol']} Gap: {opp['gap']:.2%}")
+            await executor.execute(opp)
 
-        def _immediate_execution_callback(positions):
-            """Callback for high-priority immediate execution from streaming discovery."""
-            logger.info(f"[STREAM] Immediate execution triggered for {len(positions)} positions")
-            # Run execution in a separate thread so discovery is not blocked
-            threading.Thread(
-                target=_process_and_execute,
-                args=(positions, executor, tuner),
-                daemon=True,
-                name=f"exec-{int(time.time())}"
-            ).start()
+        monitor = ArbMonitor(on_opportunity=on_opportunity)
 
-        monitor  = MultiProtocolMonitor(on_liquidatable=_immediate_execution_callback)
-        _emerg   = threading.Event()
+        # Start loops
+        tasks = [
+            asyncio.create_task(monitor.static_scanner_loop()),
+            asyncio.create_task(monitor.event_listener()),
+            asyncio.create_task(_scout_loop())
+        ]
 
-        # ── Emergency scan triggers ───────────────────────────────────────────
-        def on_price_drop(move):
-            logger.warning(
-                f"Oracle drop: {move['feed']} {move['pct_change']:+.2f}% "
-                f"-- emergency scan triggered"
-            )
-            _emerg.set()
-
-        oracle  = OracleWatcher(on_price_drop=on_price_drop)
-        mempool = start_mempool_watcher_thread(
-            on_oracle_pending=lambda ev: (
-                logger.info(f"Pending oracle update: {ev['feed_name']} -- triggering scan"),
-                _emerg.set()
-            )
-        )
-
-        # Real-time HF tracker (uses WebSocket prices)
-        rt_hf = RealTimeHFTracker(executor)
-        rt_hf.start()
-
-
-        # Load manually added/persistent zombies into monitors
-        # We also need to add these to the monitor discovery list
-        from bot.zombie_queue import get_zombie_queue
-        zq = get_zombie_queue(
-            entry_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("entry_hf", 1.05)),
-            fire_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("fire_hf", 1.0))
-        )
-        zombies = zq.get_watching()
-        for z in zombies:
-            proto = z.get("protocol")
-            user  = z.get("user")
-            if proto and user and proto in monitor.monitors:
-                monitor.monitors[proto]._borrowers.add(user.lower())
-                logger.info(f"[ZOMBIE] Loaded {user[:8]} from persistence into {proto} monitor")
-
-        # ── Load borrowers ────────────────────────────────────────────────────
-        logger.info("Loading borrower history (DB cache -> event scan)...")
-        monitor.load_all_borrowers()
-        s = monitor.get_stats()
-        logger.info(
-            f"Ready to scan | Protocols: {s['protocols']} | "
-            f"Borrowers: {s['total_borrowers']:,} | "
-            f"Zombie queue: {s['zombie_watching']}"
-        )
-        notify(f"Bot started\nProtocols: {', '.join(s['protocols'])}\nBorrowers: {s['total_borrowers']:,}")
-
-        # ── 24/7 scan loop ────────────────────────────────────────────────────
-        cycle = 0
         while _bot_running.is_set():
-            cycle += 1
-            _bot_stats["cycle"] = cycle
-            tuner.record_cycle()
+            await asyncio.sleep(1)
 
-            try:
-                # Emergency scan — fires immediately on oracle/mempool signals
-                if _emerg.is_set():
-                    _emerg.clear()
-                    logger.info("!! Emergency scan -- oracle/mempool signal")
-                    _scan_and_execute(monitor, executor, tuner, emergency=True)
-
-                # Log current state
-                try:
-                    block     = get_web3().eth.block_number
-                    gas_gwei  = get_web3().eth.gas_price / 1e9
-                except Exception:
-                    block, gas_gwei = 0, 0
-
-                logger.info(f"{'-'*56}")
-                logger.info(
-                    f"Cycle #{cycle} | Block: {block:,} | "
-                    f"Gas: {gas_gwei:.4f} gwei | "
-                    f"Mode: {(load_config() or {}).get('mode','live').upper()}"
-                )
-
-                # Check oracle price feeds for large moves
-                oracle.check_all_feeds()
-
-                # Main scan → rank → execute immediately if opportunities found
-                found = _scan_and_execute(monitor, executor, tuner)
-                _bot_stats["positions_found"] = found
-
-                # High-frequency zombie scan
-                # If emergency set (oracle update), force fresh prices for zombie check
-                is_emerg = _emerg.is_set()
-                if is_emerg: _emerg.clear()
-
-                zombies_ready = monitor.scan_zombies(force_fresh=is_emerg)
-                if zombies_ready:
-                    logger.info(f"[ZOMBIE] {len(zombies_ready)} positions ready for liquidation")
-                    _process_and_execute(zombies_ready, executor, tuner)
-                _bot_stats["last_scan"] = time.strftime("%H:%M:%S")
-
-                # Adaptive tuning every 50 cycles
-                tuner.tune()
-
-                # Refresh borrower list every hour (deep scan)
-                if cycle % (3600 // tuner.get_effective_params()["scan_interval"]) == 0:
-                    monitor.refresh_borrowers(hours=1)
-                else:
-                    # Quick refresh for recent events every cycle
-                    monitor.refresh_borrowers(hours=0.01) # last ~1 minute
-
-                # Log cycle summary
-                db   = db_get_stats()
-                mst  = monitor.get_stats()
-                logger.info(
-                    f"Cycle #{cycle} complete | "
-                    f"Borrowers: {mst['total_borrowers']:,} | "
-                    f"Zombie watching: {mst['zombie_watching']} | "
-                    f"Total liquidations: {db['total_liquidations']} | "
-                    f"All-time profit: ${db['total_profit_est_usd']:,.2f}"
-                )
-
-            except Exception as e:
-                logger.error(f"Bot loop error: {e}", exc_info=True)
-                notify(f"[WARN] Bot error: {str(e)[:200]}")
-
-            # Adaptive interval from auto-tuner (speeds up during volatile markets)
-            interval = tuner.get_effective_params()["scan_interval"]
-            for _ in range(interval):
-                if not _bot_running.is_set():
-                    break
-                # Check for emergency signals during sleep too
-                if _emerg.is_set():
-                    break
-                time.sleep(1)
+        for task in tasks:
+            task.cancel()
 
     except Exception as e:
         logger.error(f"Bot engine fatal error: {e}", exc_info=True)
@@ -226,114 +86,10 @@ def _bot_loop():
         _bot_running.clear()
         logger.info("Bot engine stopped")
 
-
-def _process_and_execute(positions, executor, tuner):
-    """
-    Core execution pipeline: Enrich → Score → Rank → Fire.
-    Shared by both the main loop and immediate streaming callbacks.
-    """
-    from bot.profitability  import rank_positions
-    from bot.risk_scorer    import rank_by_score
-    from bot.emode_detector import flag_emode_risk_positions
-    from bot.gas_manager    import is_gas_spike
-
-    if not positions:
-        return 0
-
-    # Enrich with E-Mode data (ETH LST depeg awareness)
-    positions = flag_emode_risk_positions(positions)
-
-    # Filter out skipped collaterals
-    effective_params = tuner.get_effective_params()
-    skip_collaterals = set(effective_params.get("collateral_skip", []))
-
-    scored_positions = rank_by_score(
-        [p for p in positions if p.get("collateral_symbol") not in skip_collaterals]
-    )
-
-    # Identify positions that are at-risk but might be filtered out
-    for p in scored_positions:
-        if p.get("health_factor", 2.0) <= 1.0:
-            logger.info(f"[CRITICAL] Found liquidatable position: {p['user']} HF={p['health_factor']:.4f} "
-                        f"Debt=${p.get('total_debt_usd',0):.0f}")
-
-    ranked = rank_positions(scored_positions)
-
-    if not ranked:
-        # Check if we skipped any truly liquidatable ones
-        liquidatable_count = len([p for p in scored_positions if p.get("health_factor", 2.0) <= 1.0])
-        if liquidatable_count > 0:
-            logger.warning(f"Skipped {liquidatable_count} liquidatable positions because they were unprofitable or lacked routes.")
-        else:
-            logger.info("No profitable positions after scoring and filtering")
-        return 0
-
-    mode = (load_config() or {}).get("mode", "live")
-    logger.info(
-        f"{'[SIMULATE]' if mode == 'simulate' else '[LIVE]'} | "
-        f"{len(ranked)} position(s) to execute:"
-    )
-    for i, pos in enumerate(ranked[:5], 1):
-        pi  = pos.get("profit_info", {})
-        vel = pos.get("hf_velocity")
-        ttl = pos.get("est_minutes_to_liq")
-        logger.info(
-            f"  #{i} {pos['user'][:10]}... "
-            f"HF={pos['health_factor']:.4f}"
-            + (f" down {abs(vel):.3f}/m" if vel and vel < 0 else "")
-            + (f" Time {ttl:.1f}m" if ttl else "")
-            + f" | ${pi.get('estimated_profit_usd', 0):.2f} est."
-            f" | {pos.get('collateral_symbol','?')} ({pos.get('collateral_bonus',0)*100:.0f}% bonus)"
-            f" | [{pos.get('protocol','?')}]"
-        )
-
-    # Execute immediately — no delay between scan and execution
-    # Ensure gas params are ready BEFORE this loop for maximum speed
-    results = executor.execute_batch(ranked)
-
-    for pos in ranked[:len(results)]:
-        tuner.record_success(
-            pos.get("collateral_symbol", ""),
-            pos.get("profit_info", {}).get("estimated_profit_usd", 0)
-        )
-
-    if results:
-        socketio.emit("liquidation_executed", {
-            "count": len(results),
-            "mode":  mode,
-        })
-
-    return len(ranked)
-
-def _scan_and_execute(monitor, executor, tuner, emergency=False):
-    """
-    Full scan → score → filter → execute pipeline.
-    Called every cycle AND immediately on oracle/mempool signals.
-    Returns number of opportunities found.
-    """
-    from bot.gas_manager    import is_gas_spike
-
-    # Skip gas spikes unless it's an emergency scan
-    if not emergency and is_gas_spike():
-        logger.warning("Gas spike detected -- skipping non-emergency scan")
-        return 0
-
-    # Scan all enabled protocols
-    positions = monitor.scan_all_protocols()
-    if not positions:
-        logger.info("No positions near liquidation threshold")
-        return 0
-
-    # Velocity: bubble fast-falling positions to the top
-    # Note: monitor.velocity is updated inside scan_all_protocols
-    fast = monitor.velocity.get_fast_falling(positions, velocity_threshold=-0.03)
-    if fast:
-        logger.info(f"[!] {len(fast)} fast-falling position(s) detected -- priority execution")
-        # Ensure fast positions are at the start of the list
-        positions = fast + [p for p in positions if p not in fast]
-
-    return _process_and_execute(positions, executor, tuner)
-
+async def _scout_loop():
+    while _bot_running.is_set():
+        update_watchlist()
+        await asyncio.sleep(1800) # Every 30 mins
 
 # ── Pages ─────────────────────────────────────────────────────────────────────
 @app.route("/")
@@ -349,76 +105,22 @@ def page_settings():   return render_template("settings.html")
 @app.route("/wallet")
 def page_wallet():     return render_template("wallet.html")
 
-
 # ── API: stats & positions ────────────────────────────────────────────────────
 @app.route("/api/stats")
 def api_stats():
-    return jsonify(db_get_stats())
-
-@app.route("/api/profit-history")
-def api_profit_history():
-    try:
-        from bot.persistence import history
-        data = history.get_all()
-
-        # Group by day
-        by_day = {}
-        for r in data:
-            day = time.strftime('%Y-%m-%d', time.gmtime(r.get('timestamp', 0)))
-            if day not in by_day:
-                by_day[day] = {"day": day, "count": 0, "profit": 0.0}
-            by_day[day]["count"] += 1
-            by_day[day]["profit"] += float(r.get("estimated_profit", 0))
-
-        sorted_days = sorted(by_day.values(), key=lambda x: x['day'], reverse=True)
-        return jsonify(sorted_days[:30])
-    except Exception:
-        return jsonify([])
-
-def get_merged_positions():
-    """
-    Unified source of truth: Aggregates strictly from categorized JSON stores.
-    Syncs 100% backend/frontend alignment for Critical, Danger, and Watching.
-    """
-    try:
-        from bot.persistence import critical_store, zombies_store, watching_store
-
-        all_pos = []
-        all_pos.extend(critical_store.get_all_list())
-        all_pos.extend(zombies_store.get_all_list())
-        all_pos.extend(watching_store.get_all_list())
-
-        # Ensure UI flags are consistent with HF thresholds
-        for p in all_pos:
-            hf = float(p.get("health_factor", 0))
-            # "Danger" zone in UI matches zombies.json (1.0 - 1.05)
-            p["is_zombie"] = (1.0 <= hf < 1.05)
-            # Standardize address field for UI
-            if "user" in p and "address" not in p:
-                p["address"] = p["user"]
-
-        return sorted(all_pos, key=lambda x: x.get("health_factor", 9.9))
-    except Exception as e:
-        logger.error(f"Error aggregating categorized positions: {e}")
-        return []
+    # Adapt to arbitrage stats
+    stats = db_get_stats()
+    return jsonify(stats)
 
 @app.route("/api/positions")
 def api_positions():
-    return jsonify(get_merged_positions())
-
-@app.route("/api/logs")
-def api_logs():
+    # Return watchlist for now
     try:
-        n = int(request.args.get("lines", 100))
-        if LOG_PATH.exists():
-            lines = LOG_PATH.read_text(errors="replace").splitlines()
-            return jsonify({"lines": lines[-n:]})
-    except Exception as e:
-        return jsonify({"lines": [], "error": str(e)})
-    return jsonify({"lines": []})
+        with open(ROOT / "logs" / "watchlist.json", "r") as f:
+            return jsonify(json.load(f))
+    except:
+        return jsonify([])
 
-
-# ── API: bot control ──────────────────────────────────────────────────────────
 @app.route("/api/bot/status")
 def api_bot_status():
     c = load_config()
@@ -429,357 +131,30 @@ def api_bot_status():
         "last_scan": _bot_stats["last_scan"],
         "network":   c.get("network", {}).get("chain_name", "Arbitrum One"),
         "contract":  (c.get("wallet", {}).get("liquidator_contract", "") or "")[:10] + "...",
-        "protocols": {k: v.get("enabled") for k, v in c.get("protocols", {}).items()},
     })
 
 @app.route("/api/bot/start", methods=["POST"])
 def api_bot_start():
     ok = start_bot_engine()
-    return jsonify({"ok": ok, "msg": "Started -- scanning 24/7" if ok else "Already running"})
+    return jsonify({"ok": ok, "msg": "Started -- monitoring 24/7" if ok else "Already running"})
 
 @app.route("/api/bot/stop", methods=["POST"])
 def api_bot_stop():
     ok = stop_bot_engine()
     return jsonify({"ok": ok, "msg": "Stopping..." if ok else "Not running"})
 
-
-# ── API: config ───────────────────────────────────────────────────────────────
-@app.route("/api/config")
-def api_config_get():
-    c  = load_config()
-    m  = json.loads(json.dumps(c))
-    pk = m.get("wallet", {}).get("private_key", "")
-    if pk and pk != "YOUR_PRIVATE_KEY_HERE" and len(pk) > 10:
-        m["wallet"]["private_key"] = pk[:6] + "••••••••" + pk[-4:]
-    return jsonify(m)
-
-@app.route("/api/config", methods=["POST"])
-def api_config_save():
-    try:
-        new = request.get_json()
-        cur = load_config()
-        pk  = new.get("wallet", {}).get("private_key", "")
-        if "••••••••" in pk:
-            new["wallet"]["private_key"] = cur.get("wallet", {}).get("private_key", pk)
-        with open(ROOT / "config.json", "w") as f:
-            json.dump(new, f, indent=2)
-        import bot.utils as _u; _u._config = None
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"ok": False, "msg": str(e)})
-
-
-# ── API: mode toggle ──────────────────────────────────────────────────────────
-@app.route("/api/mode")
-def api_mode_get():
-    return jsonify({"mode": (load_config() or {}).get("mode", "simulate")})
-
 @app.route("/api/mode", methods=["POST"])
 def api_mode_set():
     try:
         new_mode = (request.get_json() or {}).get("mode", "simulate")
-        if new_mode not in ("simulate", "live"):
-            return jsonify({"ok": False, "msg": "mode must be 'simulate' or 'live'"})
         cfg_data = load_config()
         cfg_data["mode"] = new_mode
         with open(ROOT / "config.json", "w") as f:
             json.dump(cfg_data, f, indent=2)
         import bot.utils as _u; _u._config = None
-        logger.info(f"Mode switched to {new_mode.upper()} -- takes effect immediately")
         return jsonify({"ok": True, "mode": new_mode})
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)})
-
-
-# ── API: wallet & withdraw ────────────────────────────────────────────────────
-@app.route("/api/wallet/balances")
-def api_wallet_balances():
-    try:
-        from bot.utils import get_web3, get_account, cfg as _cfg, checksum, ERC20_ABI
-        from bot.profitability import get_token_price_usd
-
-        w3            = get_web3()
-        account       = get_account()
-        contract_addr = _cfg("wallet", "liquidator_contract")
-        
-        if not account:
-            return jsonify({
-                "wallet":    "Not Configured",
-                "eth":       0,
-                "eth_usd":   0,
-                "contract":  contract_addr,
-                "balances":  {},
-                "total_usd": 0,
-                "error":     "Private key not set"
-            })
-
-        eth_wei       = w3.eth.get_balance(account.address)
-        eth_bal       = float(w3.from_wei(eth_wei, "ether"))
-        eth_price     = get_token_price_usd(cfg("network", "weth"))
-
-        result = {
-            "wallet":    account.address,
-            "eth":       round(eth_bal, 6),
-            "eth_usd":   round(eth_bal * eth_price, 2),
-            "contract":  contract_addr,
-            "balances":  {},
-            "total_usd": 0.0,
-        }
-
-        if not contract_addr or contract_addr == "DEPLOY_CONTRACT_ADDRESS_HERE":
-            return jsonify(result)
-
-        tokens = _cfg("tokens")
-        total  = 0.0
-        for sym, info in tokens.items():
-            try:
-                tok = w3.eth.contract(address=checksum(info["address"]), abi=ERC20_ABI)
-                raw = tok.functions.balanceOf(checksum(contract_addr)).call()
-                if raw == 0: continue
-                amount = raw / (10 ** info["decimals"])
-                price  = get_token_price_usd(info["address"]) or 0
-                usd    = amount * price
-                total += usd
-                result["balances"][sym] = {
-                    "amount": round(amount, 6),
-                    "usd":    round(usd, 2),
-                    "address": info["address"],
-                }
-            except Exception:
-                pass
-
-        result["total_usd"] = round(total, 2)
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e), "balances": {}, "total_usd": 0})
-
-
-@app.route("/api/wallet/withdraw", methods=["POST"])
-def api_wallet_withdraw():
-    from bot.utils import get_web3, get_account, cfg as _cfg, checksum, ERC20_ABI, LIQUIDATOR_CONTRACT_ABI
-
-    if (load_config() or {}).get("mode", "simulate") == "simulate":
-        return jsonify({
-            "ok":  False,
-            "msg": "Switch to LIVE mode in Settings before withdrawing"
-        })
-
-    data          = request.get_json() or {}
-    token_sym     = data.get("token")
-    w3            = get_web3()
-    account       = get_account()
-    contract_addr = _cfg("wallet", "liquidator_contract")
-
-    if not account:
-        return jsonify({"ok": False, "msg": "Private key not set in Settings"})
-    if not contract_addr or contract_addr == "DEPLOY_CONTRACT_ADDRESS_HERE":
-        return jsonify({"ok": False, "msg": "Contract not deployed or address not set"})
-
-    contract = w3.eth.contract(address=checksum(contract_addr), abi=LIQUIDATOR_CONTRACT_ABI)
-    try:
-        owner = contract.functions.owner().call()
-        if owner.lower() != account.address.lower():
-            return jsonify({"ok": False, "msg": f"Wallet is not contract owner ({owner[:10]}...)"})
-    except Exception as e:
-        return jsonify({"ok": False, "msg": f"Ownership check failed: {e}"})
-
-    gas_cfg = _cfg("gas")
-    tokens  = _cfg("tokens")
-    if token_sym:
-        tokens = {k: v for k, v in tokens.items() if k == token_sym}
-
-    results = []
-    for sym, info in tokens.items():
-        try:
-            tok     = w3.eth.contract(address=checksum(info["address"]), abi=ERC20_ABI)
-            raw_bal = tok.functions.balanceOf(checksum(contract_addr)).call()
-            if raw_bal == 0:
-                results.append({"token": sym, "status": "skipped", "msg": "zero balance"})
-                continue
-            nonce = w3.eth.get_transaction_count(account.address)
-            tx    = contract.functions.withdraw(checksum(info["address"])).build_transaction({
-                "from": account.address, "nonce": nonce, "gas": 120_000,
-                "maxFeePerGas":         w3.to_wei(gas_cfg["max_fee_per_gas_gwei"], "gwei"),
-                "maxPriorityFeePerGas": w3.to_wei(gas_cfg["max_priority_fee_gwei"], "gwei"),
-                "chainId":              _cfg("network", "chain_id"),
-            })
-            signed  = account.sign_transaction(tx)
-            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
-            amount  = raw_bal / (10 ** info["decimals"])
-            if receipt.status == 1:
-                logger.info(f"Withdrew {amount:.4f} {sym} | TX: {tx_hash.hex()[:20]}")
-                results.append({"token": sym, "status": "success", "amount": round(amount, 6), "tx_hash": tx_hash.hex()})
-            else:
-                results.append({"token": sym, "status": "failed", "tx_hash": tx_hash.hex()})
-        except Exception as e:
-            results.append({"token": sym, "status": "error", "msg": str(e)})
-
-    return jsonify({"ok": True, "results": results})
-
-
-# ── API: health check ─────────────────────────────────────────────────────────
-@app.route("/api/health-check")
-def api_health_check():
-    import time as _time
-    from bot.utils import AAVE_POOL_ABI, CHAINLINK_FEED_ABI
-
-    checks = []
-    def add(name, status, detail):
-        checks.append({"name": name, "status": status, "detail": detail})
-
-    cfg_data = load_config()
-
-    pk = cfg_data.get("wallet", {}).get("private_key", "")
-    if not pk or pk == "YOUR_PRIVATE_KEY_HERE":
-        add("Private Key", "fail", "Not set in config.json")
-    else:
-        add("Private Key", "ok", pk[:6] + "••••" + pk[-4:])
-
-    contract = cfg_data.get("wallet", {}).get("liquidator_contract", "")
-    if not contract or contract == "DEPLOY_CONTRACT_ADDRESS_HERE":
-        add("Contract Address", "warn", "Deploy contracts/FlashLoanLiquidator.sol first")
-    else:
-        add("Contract Address", "ok", contract[:10] + "...")
-
-    rpc = cfg_data.get("network", {}).get("rpc_http", "")
-    if not rpc:
-        add("RPC Endpoint", "fail", "network.rpc_http not set")
-        return jsonify({"checks": checks, "summary": "fail"})
-    add("RPC Endpoint", "ok", rpc[:45] + ("…" if len(rpc) > 45 else ""))
-
-    try:
-        from web3 import Web3
-        w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 10}))
-        if not w3.is_connected():
-            add("RPC Connection", "fail", "Connected but not responding")
-            return jsonify({"checks": checks, "summary": "fail"})
-        block = w3.eth.block_number
-        gas   = w3.eth.gas_price / 1e9
-        add("RPC Connection", "ok", f"Block {block:,} | Gas {gas:.4f} gwei")
-    except Exception as e:
-        add("RPC Connection", "fail", str(e)[:80])
-        return jsonify({"checks": checks, "summary": "fail"})
-
-    try:
-        from eth_account import Account as _A
-        acc  = _A.from_key(pk)
-        bal  = float(w3.from_wei(w3.eth.get_balance(acc.address), "ether"))
-        if bal >= 0.01:   add("Wallet ETH", "ok",   f"{acc.address[:10]}... | {bal:.5f} ETH")
-        elif bal >= 0.002: add("Wallet ETH", "warn", f"{acc.address[:10]}... | {bal:.5f} ETH (low)")
-        else:              add("Wallet ETH", "fail", f"{acc.address[:10]}... | {bal:.6f} ETH (too low)")
-    except Exception as e:
-        add("Wallet ETH", "fail", str(e)[:80])
-
-    if contract and contract != "DEPLOY_CONTRACT_ADDRESS_HERE":
-        try:
-            code = w3.eth.get_code(w3.to_checksum_address(contract))
-            if len(code) > 2: add("Liquidator Contract", "ok",   f"{contract[:10]}... ({len(code)} bytes)")
-            else:              add("Liquidator Contract", "fail", "No code — deploy contract")
-        except Exception as e:
-            add("Liquidator Contract", "fail", str(e)[:80])
-    else:
-        add("Liquidator Contract", "warn", "Not deployed yet")
-
-    for name, pcfg in cfg_data.get("protocols", {}).items():
-        if not pcfg.get("enabled"):
-            add(f"Protocol: {name}", "warn", "Disabled"); continue
-        pool = pcfg.get("pool", "")
-        if not pool or pool.startswith("0x000"):
-            add(f"Protocol: {name}", "warn", "No pool address"); continue
-        try:
-            p = w3.eth.contract(address=w3.to_checksum_address(pool), abi=AAVE_POOL_ABI)
-            p.functions.getUserAccountData("0x0000000000000000000000000000000000000001").call()
-            add(f"Protocol: {name}", "ok", pool[:10] + "... responsive")
-        except Exception as e:
-            add(f"Protocol: {name}", "fail", str(e)[:60])
-
-    try:
-        vault = cfg_data.get("flash_loan", {}).get("balancer_vault")
-        code  = w3.eth.get_code(w3.to_checksum_address(vault))
-        add("Balancer Vault (0% fee)", "ok" if len(code) > 2 else "fail",
-            vault[:10] + "... reachable" if len(code) > 2 else "Not found")
-    except Exception as e:
-        add("Balancer Vault (0% fee)", "fail", str(e)[:60])
-
-    if cfg_data.get("oracle", {}).get("watch_chainlink"):
-        for feed_name, addr in cfg_data.get("oracle", {}).get("chainlink_feeds", {}).items():
-            try:
-                from bot.utils import CHAINLINK_FEED_ABI as CL_ABI
-                feed  = w3.eth.contract(address=w3.to_checksum_address(addr), abi=CL_ABI)
-                data  = feed.functions.latestRoundData().call()
-                price = data[1] / 1e8
-                age   = int(_time.time()) - data[3]
-                add(f"Oracle: {feed_name}", "ok" if age < 3600 else "warn",
-                    f"${price:,.2f} ({age}s ago)" if age < 3600 else f"${price:,.2f} (stale {age//3600}h)")
-            except Exception as e:
-                add(f"Oracle: {feed_name}", "fail", str(e)[:60])
-    else:
-        add("Oracle Feeds", "warn", "Chainlink watching disabled")
-
-    try:
-        quoter = cfg_data.get("network", {}).get("uniswap_v3_quoter")
-        code = w3.eth.get_code(w3.to_checksum_address(quoter))
-        add("Uniswap V3 Quoter", "ok" if len(code) > 2 else "fail",
-            "Reachable" if len(code) > 2 else "Not found")
-    except Exception as e:
-        add("Uniswap V3 Quoter", "fail", str(e)[:60])
-
-    failed  = sum(1 for c in checks if c["status"] == "fail")
-    warned  = sum(1 for c in checks if c["status"] == "warn")
-    summary = "fail" if failed else "warn" if warned else "ok"
-    return jsonify({"checks": checks, "summary": summary, "failed": failed, "warned": warned})
-
-
-# ── API: analytics ────────────────────────────────────────────────────────────
-@app.route("/api/analytics")
-def api_analytics():
-    """Full analytics breakdown by protocol, collateral, and time period."""
-    try:
-        from bot.persistence import history
-        days = int(request.args.get("days", 30))
-        since = int(time.time()) - (days * 86400)
-        data = history.get_all()
-
-        # Filtered and derived stats
-        all_count = len(data)
-        all_profit = sum(float(r.get("estimated_profit", 0)) for r in data)
-
-        period_data = [r for r in data if r.get("timestamp", 0) > since]
-        period_count = len(period_data)
-        period_profit = sum(float(r.get("estimated_profit", 0)) for r in period_data)
-
-        by_proto = {}
-        by_col = {}
-        daily = {}
-
-        for r in period_data:
-            p = r.get("protocol", "Unknown")
-            by_proto[p] = by_proto.get(p, {"count": 0, "profit": 0.0})
-            by_proto[p]["count"] += 1
-            by_proto[p]["profit"] += float(r.get("estimated_profit", 0))
-
-            c = r.get("collateral_token", "Unknown")
-            by_col[c] = by_col.get(c, {"count": 0, "profit": 0.0})
-            by_col[c]["count"] += 1
-            by_col[c]["profit"] += float(r.get("estimated_profit", 0))
-
-            day = time.strftime('%Y-%m-%d', time.gmtime(r.get('timestamp', 0)))
-            daily[day] = daily.get(day, {"count": 0, "profit": 0.0})
-            daily[day]["count"] += 1
-            daily[day]["profit"] += float(r.get("estimated_profit", 0))
-
-        return jsonify({
-            "days":        days,
-            "all_time":    {"count": all_count, "profit": round(all_profit, 2)},
-            "period":      {"count": period_count, "profit": round(period_profit, 2)},
-            "by_protocol": [{"protocol": k, "count": v["count"], "profit": round(v["profit"], 2)} for k, v in by_proto.items()],
-            "by_collateral":[{"token": k, "count": v["count"], "profit": round(v["profit"], 2)} for k, v in by_col.items()],
-            "daily":       [{"day": k, "count": v["count"], "profit": round(v["profit"], 2)} for k, v in sorted(daily.items())],
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
 
 # ── Real-time SocketIO push ───────────────────────────────────────────────────
 def _push_loop():
@@ -787,89 +162,31 @@ def _push_loop():
         with app.app_context():
             try:
                 stats = db_get_stats()
-                socketio.emit("stats",      stats)
+                socketio.emit("stats", stats)
                 socketio.emit("bot_status", {
                     "running":   bot_is_running(),
                     "mode":      (load_config() or {}).get("mode", "simulate"),
-                    "cycle":     _bot_stats["cycle"],
-                    "last_scan": _bot_stats["last_scan"],
                 })
-                # Send more positions to ensure frontend has enough to display/filter
-                socketio.emit("positions",  get_merged_positions()[:100])
+                # Emit watchlist as positions to keep frontend logic working
+                try:
+                    with open(ROOT / "logs" / "watchlist.json", "r") as f:
+                        socketio.emit("positions", json.load(f))
+                except:
+                    pass
             except Exception:
                 pass
-        # Increase frequency during initial scan
         time.sleep(1)
-
-
-def _log_tail():
-    """Tail the log file and push new lines to connected browsers."""
-    pos = 0
-    while True:
-        try:
-            if LOG_PATH.exists():
-                with open(LOG_PATH, errors="replace") as f:
-                    f.seek(pos)
-                    new = f.read()
-                    pos = f.tell()
-                    if new:
-                        for line in new.splitlines():
-                            if line.strip():
-                                socketio.emit("log_line", {"line": line})
-        except Exception:
-            pass
-        time.sleep(1)
-
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 def main():
-    parser = argparse.ArgumentParser(
-        description="LiqBot — Arbitrum Flash Loan Liquidation Bot",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Terminal scan tool: python scan_test.py"
-    )
-    parser.add_argument("--port",   type=int, default=5000,    help="Web UI port (default 5000)")
-    parser.add_argument("--host",   type=str, default="0.0.0.0", help="Bind address")
-    parser.add_argument("--no-bot", action="store_true",        help="Start UI only, use dashboard to start bot")
+    parser = argparse.ArgumentParser(description="ArbBot — Sentinel Hybrid Arbitrage Bot")
+    parser.add_argument("--port",   type=int, default=5000)
+    parser.add_argument("--host",   type=str, default="0.0.0.0")
     args = parser.parse_args()
 
-    # Bot status strings
-    pk           = cfg("wallet", "private_key")
-    has_pk       = bool(pk) and pk != "YOUR_PRIVATE_KEY_HERE"
-    contract     = cfg("wallet", "liquidator_contract")
-    has_contract = bool(contract) and contract != "DEPLOY_CONTRACT_ADDRESS_HERE"
-
-    # Start background threads
     threading.Thread(target=_push_loop, daemon=True, name="push").start()
-    threading.Thread(target=_log_tail,  daemon=True, name="log-tail").start()
-
-    # Auto-start bot engine if contract is configured
-    contract     = cfg("wallet", "liquidator_contract")
-    has_contract = bool(contract) and contract != "DEPLOY_CONTRACT_ADDRESS_HERE"
-
-    if not args.no_bot and has_pk and has_contract:
-        threading.Thread(target=start_bot_engine, daemon=True).start()
-        bot_status = "auto-starting — scanning 24/7"
-    else:
-        if args.no_bot:
-            reason = "--no-bot flag"
-        elif not has_pk:
-            reason = "private_key not set"
-        else:
-            reason = "liquidator_contract not set"
-        bot_status = f"manual start required ({reason})"
-        logger.info(f"Bot not auto-started: {reason}")
-
-    mode = cfg("mode") or "simulate"
-
-    print(f"\n{'═'*56}")
-    print(f"  LiqBot  →  http://localhost:{args.port}")
-    print(f"  Mode:       {mode.upper()}")
-    print(f"  Bot:        {bot_status}")
-    print(f"{'═'*56}\n")
 
     socketio.run(app, host=args.host, port=args.port, debug=False, log_output=False, allow_unsafe_werkzeug=True)
-
 
 if __name__ == "__main__":
     main()
