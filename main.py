@@ -143,18 +143,54 @@ def api_bot_stop():
     ok = stop_bot_engine()
     return jsonify({"ok": ok, "msg": "Stopping..." if ok else "Not running"})
 
-@app.route("/api/mode", methods=["POST"])
+@app.route("/api/mode", methods=["GET", "POST"])
 def api_mode_set():
+    if request.method == "POST":
+        try:
+            new_mode = (request.get_json() or {}).get("mode", "simulate")
+            cfg_data = load_config()
+            cfg_data["mode"] = new_mode
+            with open(ROOT / "config.json", "w") as f:
+                json.dump(cfg_data, f, indent=2)
+            import bot.utils as _u; _u._config = None
+            return jsonify({"ok": True, "mode": new_mode})
+        except Exception as e:
+            return jsonify({"ok": False, "msg": str(e)})
+    else:
+        return jsonify({"mode": load_config().get("mode", "simulate")})
+
+@app.route("/api/profit-history")
+def api_profit_history():
+    # Return mock or real history from persistence
     try:
-        new_mode = (request.get_json() or {}).get("mode", "simulate")
-        cfg_data = load_config()
-        cfg_data["mode"] = new_mode
-        with open(ROOT / "config.json", "w") as f:
-            json.dump(cfg_data, f, indent=2)
-        import bot.utils as _u; _u._config = None
-        return jsonify({"ok": True, "mode": new_mode})
-    except Exception as e:
-        return jsonify({"ok": False, "msg": str(e)})
+        from bot.persistence import HISTORY_PATH
+        if HISTORY_PATH.exists():
+            with open(HISTORY_PATH, "r") as f:
+                data = json.load(f)
+            # Group by day and sum profit
+            history = {}
+            for r in data:
+                day = time.strftime("%m/%d", time.localtime(r.get("timestamp", 0)))
+                history[day] = history.get(day, 0) + float(r.get("estimated_profit", 0))
+
+            # Convert to list of {day, profit}
+            res = [{"day": d, "profit": p} for d, p in history.items()]
+            return jsonify(res)
+    except:
+        pass
+    return jsonify([])
+
+@app.route("/api/logs")
+def api_logs():
+    lines = int(request.args.get("lines", 100))
+    try:
+        if LOG_PATH.exists():
+            with open(LOG_PATH, "r") as f:
+                content = f.readlines()
+            return jsonify({"logs": content[-lines:]})
+    except:
+        pass
+    return jsonify({"logs": []})
 
 # ── Real-time SocketIO push ───────────────────────────────────────────────────
 def _push_loop():

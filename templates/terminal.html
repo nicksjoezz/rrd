@@ -178,11 +178,13 @@ async function stopBot() {
   botStartTime = null;
 }
 
-// Load last 100 lines on startup
+// Load last 150 lines on startup
 (async () => {
-  const r = await fetch('/api/logs?lines=150');
-  const d = await r.json();
-  if (d.lines) d.lines.forEach(l => addLine(l));
+  try {
+    const r = await fetch('/api/logs?lines=150');
+    const d = await r.json();
+    if (d.logs) d.logs.forEach(l => addLine(l));
+  } catch(e) {}
 })();
 
 // Uptime counter
