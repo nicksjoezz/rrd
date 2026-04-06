@@ -18,7 +18,7 @@ from bot.database import (
     get_stats as db_get_stats, init_db
 )
 from bot.scout    import update_watchlist
-from bot.arb_monitor import ArbMonitor
+from bot.monitor import ArbMonitor
 from bot.executor import ArbExecutor
 
 # -- Flask app -----------------------------------------------------------------

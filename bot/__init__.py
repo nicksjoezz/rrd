@@ -3,8 +3,8 @@ ArbBot — Module Index
 
 Core pipeline:
   utils            config, web3, ABIs, logging, Telegram
-  scout            token filtering (DexScreener)
-  arb_monitor      hybrid monitoring (Static/WebSocket)
+  scout            token filtering (GeckoTerminal)
+  monitor          hybrid monitoring (Static/WebSocket)
   executor         flash loan arbitrage execution
   arb_math         optimal trade size calculation
 
@@ -12,7 +12,7 @@ Infrastructure:
   database         JSON persistence: watchlist, history, stats
 """
 from .utils              import load_config, setup_logging, get_web3, get_account
-from .arb_monitor        import ArbMonitor
+from .monitor            import ArbMonitor
 from .executor           import ArbExecutor
 from .scout              import update_watchlist
 from .arb_math           import calculate_optimal_input

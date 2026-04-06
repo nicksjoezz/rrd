@@ -1,6 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
+/**
+ * @title FlashLoanArbitrage
+ * @dev Hybrid Sentinel Arbitrage Executor
+ * Flow:
+ * 1. Flash borrow USDC from Uniswap V3.
+ * 2. Buy TokenX on Camelot (V2 or V3/Algebra).
+ * 3. Sell TokenX back to USDC on Uniswap V3.
+ * 4. Repay flash loan + fee.
+ * 5. Keep profit in contract or send to owner.
+ */
+
 interface IERC20 {
     function balanceOf(address account) external view returns (uint256);
     function transfer(address to, uint256 amount) external returns (bool);
@@ -60,8 +71,11 @@ contract FlashLoanArbitrage {
     address public owner;
 
     // Arbitrum Mainnet Addresses
-    address public constant CAMELOT_ROUTER = 0xc873fEcbd354f5A56E00E710B90EF4201db2448d;
-    address public constant UNIV3_ROUTER    = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    address public constant CAMELOT_V2_ROUTER = 0xc873fEcbd354f5A56E00E710B90EF4201db2448d;
+    address public constant CAMELOT_V3_ROUTER = 0x1F721E2E82F6676FCE4eA07A5958cF098D339e18; // Algebra
+    address public constant UNIV3_ROUTER      = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+
+    event ArbExecuted(address token, uint256 amountIn, uint256 profit);
 
     constructor() {
         owner = msg.sender;
@@ -72,6 +86,16 @@ contract FlashLoanArbitrage {
         _;
     }
 
+    /**
+     * @notice Initiates the arbitrage.
+     * @param flashPool The UniV3 pool to borrow USDC from.
+     * @param tokenX The target token to arbitrage.
+     * @param tokenUSDC The USDC token address.
+     * @param amountUSDC Amount to borrow.
+     * @param uniV3Fee The fee of the UniV3 pool for the sell leg.
+     * @param minProfit Minimum profit required (in USDC decimals).
+     * @param isCamelotV3 True if using Camelot V3 for the buy leg.
+     */
     function executeArb(
         address flashPool,
         address tokenX,
@@ -105,11 +129,12 @@ contract FlashLoanArbitrage {
 
         uint256 fee = fee0 > 0 ? fee0 : fee1;
         uint256 amountToRepay = amountUSDC + fee;
+        uint256 balBefore = IERC20(tokenUSDC).balanceOf(address(this));
 
-        // 1. Buy TokenX on Camelot
+        // 1. Leg 1: Buy TokenX on Camelot
         if (isCamelotV3) {
-            IERC20(tokenUSDC).approve(0x1F721E2E82F6676FCE4eA07A5958cF098D339e18, amountUSDC); // Camelot V3 Router
-            ICamelotV3Router(0x1F721E2E82F6676FCE4eA07A5958cF098D339e18).exactInputSingle(
+            IERC20(tokenUSDC).approve(CAMELOT_V3_ROUTER, amountUSDC);
+            ICamelotV3Router(CAMELOT_V3_ROUTER).exactInputSingle(
                 ICamelotV3Router.ExactInputSingleParams({
                     tokenIn: tokenUSDC,
                     tokenOut: tokenX,
@@ -121,14 +146,14 @@ contract FlashLoanArbitrage {
                 })
             );
         } else {
-            IERC20(tokenUSDC).approve(CAMELOT_ROUTER, amountUSDC);
+            IERC20(tokenUSDC).approve(CAMELOT_V2_ROUTER, amountUSDC);
             address[] memory path = new address[](2);
             path[0] = tokenUSDC;
             path[1] = tokenX;
 
-            ICamelotRouter(CAMELOT_ROUTER).swapExactTokensForTokensSupportingFeeOnTransferTokens(
+            ICamelotRouter(CAMELOT_V2_ROUTER).swapExactTokensForTokensSupportingFeeOnTransferTokens(
                 amountUSDC,
-                0, // minAmountOut
+                0,
                 path,
                 address(this),
                 address(0),
@@ -136,7 +161,7 @@ contract FlashLoanArbitrage {
             );
         }
 
-        // 2. Sell TokenX on UniV3
+        // 2. Leg 2: Sell TokenX on UniV3
         uint256 tokenXBal = IERC20(tokenX).balanceOf(address(this));
         IERC20(tokenX).approve(UNIV3_ROUTER, tokenXBal);
 
@@ -156,10 +181,15 @@ contract FlashLoanArbitrage {
         // 3. Repay Flash Loan
         IERC20(tokenUSDC).transfer(msg.sender, amountToRepay);
 
-        // 4. Send profit to owner
-        uint256 profit = IERC20(tokenUSDC).balanceOf(address(this));
-        if (profit > 0) {
-            IERC20(tokenUSDC).transfer(owner, profit);
+        // 4. Final verification
+        uint256 balAfter = IERC20(tokenUSDC).balanceOf(address(this));
+        require(balAfter >= balBefore + minProfit, "Insufficient Profit");
+
+        emit ArbExecuted(tokenX, amountUSDC, balAfter - balBefore);
+
+        // Auto-withdraw profit to owner
+        if (balAfter > 0) {
+            IERC20(tokenUSDC).transfer(owner, balAfter);
         }
     }
 
