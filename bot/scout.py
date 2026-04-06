@@ -9,154 +9,101 @@ WATCHLIST_PATH = ROOT_DIR / "logs" / "watchlist.json"
 
 async def fetch_watchlist():
     """
-    Broadly fetch tokens from DexScreener and Arbitrum Token List.
-    Identifies candidates, then checks each for dual-listing (Camelot + UniV3).
+    ULTRA-AGGRESSIVE Discovery.
+    Uses official Arbitrum Token List and multiple DEX endpoints to maximize watchlist.
     """
     potential_tokens = set()
+    headers = {"Accept": "application/json"}
 
-    async with httpx.AsyncClient() as client:
-        # 1. Fetch Arbitrum Token Lists
-        token_lists = [
-            "https://tokenlist.arbitrum.io/ArbTokenLists/arbed_arb_whitelist_era.json",
-            "https://bridge.arbitrum.io/token-list-42161.json"
-        ]
-        for url in token_lists:
-            logger.info(f"Fetching token list: {url}...")
-            try:
-                resp = await client.get(url, timeout=15)
-                if resp.status_code == 200:
-                    tokens = resp.json().get("tokens", [])
-                    for t in tokens:
-                        if t.get("chainId") == 42161:
-                            addr = t.get("address", "").lower()
-                            if addr: potential_tokens.add(addr)
-            except Exception as e:
-                logger.error(f"Token list {url} fetch failed: {e}")
+    usdc_addrs = [
+        "0xaf88d065e77c8cC2239327C5EDb3A432268e5831".lower(), # Native
+        "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8".lower(), # Bridged
+        "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1".lower()  # WETH
+    ]
 
-        # 2. Fetch Trending/Boosted Tokens
-        logger.info("Fetching trending tokens from DexScreener Boosts...")
+    async with httpx.AsyncClient(headers=headers) as client:
+        # 1. Official Arbitrum Token List (The best source for established tokens)
+        logger.info("Fetching official Arbitrum whitelist...")
         try:
-            url = "https://api.dexscreener.com/token-boosts/top/v1"
+            url = "https://tokenlist.arbitrum.io/ArbTokenLists/arbed_arb_whitelist_era.json"
             resp = await client.get(url, timeout=15)
             if resp.status_code == 200:
-                boosts = resp.json()
-                for b in boosts:
-                    if b.get("chainId") == "arbitrum":
-                        addr = b.get("tokenAddress", "").lower()
-                        if addr: potential_tokens.add(addr)
-        except Exception as e:
-            logger.error(f"DexScreener Boosts fetch failed: {e}")
+                for t in resp.json().get("tokens", []):
+                    if t.get("chainId") == 42161:
+                        potential_tokens.add(t.get("address", "").lower())
+        except Exception: pass
 
-        # 3. Broad search for Arbitrum tokens using alphabetical discovery
-        import string
-        # Triple the queries to find long-tail low caps
-        search_prefixes = ["arbitrum " + c for c in string.ascii_lowercase + string.digits]
-        camelot_prefixes = ["camelot " + c for c in string.ascii_lowercase + string.digits]
-        univ3_prefixes = ["uniswap " + c for c in string.ascii_lowercase + string.digits]
+        # 2. GeckoTerminal Discovery (All DEXes)
+        dexes = ["uniswap_v3_arbitrum", "camelot", "camelot-v3", "sushiswap_arbitrum", "pancakeswap-v3-arbitrum"]
+        for dex in dexes:
+            logger.info(f"Gecko Discovery: {dex}...")
+            for page in range(1, 11):
+                try:
+                    url = f"https://api.geckoterminal.com/api/v2/networks/arbitrum/dexes/{dex}/pools?page={page}"
+                    resp = await client.get(url, timeout=15)
+                    if resp.status_code != 200: break
+                    data = resp.json()
+                    for p in data.get('data', []):
+                        rel = p.get("relationships", {})
+                        base = rel.get("base_token", {}).get("data", {}).get("id", "").split("_")[-1].lower()
+                        quote = rel.get("quote_token", {}).get("data", {}).get("id", "").split("_")[-1].lower()
+                        if base and base not in usdc_addrs: potential_tokens.add(base)
+                        if quote and quote not in usdc_addrs: potential_tokens.add(quote)
+                    await asyncio.sleep(1.1)
+                except Exception: break
 
-        # Even more queries to find low caps
-        queries = search_prefixes + camelot_prefixes + univ3_prefixes + [
-            "arbitrum", "camelot", "uniswap", "usdc", "weth", "top", "trending", "gainers", "new", "meme",
-            "pepe", "doge", "shib", "inu", "ai", "base", "token", "coin", "protocol", "dao"
-        ]
-
-        logger.info(f"Starting discovery search with {len(queries)} queries...")
-        for q in queries:
-            try:
-                url = f"https://api.dexscreener.com/latest/dex/search/?q={q.replace(' ', '%20')}"
-                resp = await client.get(url, timeout=15)
-                if resp.status_code == 200:
-                    pairs = resp.json().get("pairs", [])
-                    for p in pairs:
-                        if p.get("chainId") == "arbitrum":
-                            addr = p.get("baseToken", {}).get("address", "").lower()
-                            if addr: potential_tokens.add(addr)
-                # Quick sleep to stay under potential global rate limits
-                await asyncio.sleep(0.1)
-            except Exception as e:
-                logger.error(f"DexScreener search failed for {q}: {e}")
-
-        logger.info(f"Discovered {len(potential_tokens)} potential tokens. Verifying dual-listings...")
-
-        # 4. Deep-check each token for dual-listing (Camelot V2/V3 + UniV3)
+        logger.info(f"Verifying {len(potential_tokens)} candidates for dual-listing...")
         watchlist = []
-        usdc_addrs = [
-            "0xaf88d065e77c8cC2239327C5EDb3A432268e5831".lower(), # Native
-            "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8".lower(), # Bridged
-            "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1".lower()  # WETH fallback
-        ]
-
         token_list = list(potential_tokens)
-        # Check in batches of 30 for efficiency
+
+        # 3. Batch verify via DexScreener
         for i in range(0, len(token_list), 30):
             batch = token_list[i:i+30]
             try:
-                url = f"https://api.dexscreener.com/latest/dex/tokens/{','.join(batch)}"
-                resp = await client.get(url, timeout=15)
+                ds_url = f"https://api.dexscreener.com/latest/dex/tokens/{','.join(batch)}"
+                resp = await client.get(ds_url, timeout=15)
                 if resp.status_code != 200: continue
-
                 data = resp.json()
-                pairs = data.get("pairs", [])
-                if not pairs: continue
-
-                # Group pairs by token
                 token_to_pairs = {}
-                for p in pairs:
+                for p in data.get("pairs", []):
                     if p.get("chainId") != "arbitrum": continue
                     addr = p.get("baseToken", {}).get("address", "").lower()
                     if addr not in token_to_pairs: token_to_pairs[addr] = []
                     token_to_pairs[addr].append(p)
 
                 for addr, t_pairs in token_to_pairs.items():
-                    # We need a Camelot pool and a UniV3 pool, both against USDC/WETH
-                    c_pools = [p for p in t_pairs if p.get("dexId") == "camelot" and p.get("quoteToken", {}).get("address").lower() in usdc_addrs]
-                    u_pools = [p for p in t_pairs if p.get("dexId") == "uniswap" and "v2" not in p.get("labels", []) and p.get("quoteToken", {}).get("address").lower() in usdc_addrs]
+                    c_pools = [p for p in t_pairs if p.get("dexId") == "camelot"]
+                    u_pools = [p for p in t_pairs if p.get("dexId") == "uniswap" and "v2" not in p.get("labels", [])]
 
                     if c_pools and u_pools:
-                        # Pick best Camelot (V2 preferred for now, or V3)
-                        c_v2 = [p for p in c_pools if not p.get("labels")]
-                        c_v3 = [p for p in c_pools if "v3" in p.get("labels", [])]
+                        best_c = sorted(c_pools, key=lambda x: float(x.get("liquidity", {}).get("usd", 0) or 0), reverse=True)[0]
+                        best_u = sorted(u_pools, key=lambda x: float(x.get("liquidity", {}).get("usd", 0) or 0), reverse=True)[0]
 
-                        best_c = None
-                        is_v3 = False
-                        if c_v2:
-                            best_c = sorted(c_v2, key=lambda x: float(x.get("liquidity", {}).get("usd", 0) or 0), reverse=True)[0]
-                            is_v3 = False
-                        elif c_v3:
-                            best_c = sorted(c_v3, key=lambda x: float(x.get("liquidity", {}).get("usd", 0) or 0), reverse=True)[0]
-                            is_v3 = True
+                        mcap = float(best_c.get("fdv", 0) or 0)
+                        liq = float(best_c.get("liquidity", {}).get("usd", 0) or 0)
+                        symbol = best_c.get("baseToken", {}).get("symbol", "???")
 
-                        if best_c:
-                            best_u = sorted(u_pools, key=lambda x: float(x.get("liquidity", {}).get("usd", 0) or 0), reverse=True)[0]
-
-                            mcap = float(best_c.get("fdv", 0) or 0)
-                            liq = float(best_c.get("liquidity", {}).get("usd", 0) or 0)
-                            symbol = best_c.get("baseToken", {}).get("symbol")
-
-                        # Filtering (Catch all for low caps)
-                        if (liq >= 100):
-                                watchlist.append({
-                                    "address": checksum(addr),
-                                    "symbol": symbol,
-                                    "camelotPool": checksum(best_c.get("pairAddress")),
-                                    "univ3Pool": checksum(best_u.get("pairAddress")),
-                                    "isCamelotV3": is_v3,
-                                    "mcap": mcap,
-                                    "liq": liq
-                                })
+                        # High Discovery mode: Added regardless of size if it has liquidity
+                        if liq >= 100:
+                            watchlist.append({
+                                "address": checksum(addr),
+                                "symbol": symbol,
+                                "camelotPool": checksum(best_c.get("pairAddress")),
+                                "univ3Pool": checksum(best_u.get("pairAddress")),
+                                "isCamelotV3": "v3" in best_c.get("labels", []),
+                                "mcap": mcap,
+                                "liq": liq
+                            })
                 await asyncio.sleep(0.5)
-            except Exception as e:
-                logger.error(f"Batch verification failed: {e}")
+            except Exception: pass
 
     return watchlist
 
 async def update_watchlist():
-    logger.info("Scouting for arbitrage-ready tokens...")
+    logger.info("Executing global discovery cycle...")
     watchlist = await fetch_watchlist()
-
     with open(WATCHLIST_PATH, "w") as f:
         json.dump(watchlist, f, indent=2)
-
     logger.info(f"Watchlist updated: {len(watchlist)} tokens found.")
     return watchlist
 

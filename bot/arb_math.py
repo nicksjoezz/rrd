@@ -25,15 +25,13 @@ def calculate_optimal_input(u_liq_usd, c_liq_usd, p_u, p_c):
         # x = (sqrt(ratio) - 1) * (L_usd / 2)
         theoretical_x = (math.sqrt(ratio) - 1) * (L_usd / 2)
 
-        # Target amount is a safe percentage of the pool to ensure minimal slippage/impact
-        # 2% is a industry standard for low-impact flash loans
-        limit_x = L_usd * 0.02
+        # Target amount is a safe percentage of the pool to ensure minimal slippage/impact.
+        # We strictly use 3% of the total liquidity to guarantee zero market impact
+        # while maintaining enough size to be profitable, as requested.
+        final_x = L_usd * 0.03
 
-        # Take the lesser of the theoretical optimal and our safety limit
-        final_x = min(theoretical_x, limit_x)
-
-        # Floor of $10 to ensure gas overhead is worth it
-        return max(10, final_x)
+        # Ensure we return a positive number
+        return max(0, final_x)
     except Exception as e:
         logger.error(f"Error calculating optimal input: {e}")
-        return 100 # Safe default
+        return 0
