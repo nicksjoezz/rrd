@@ -24,11 +24,12 @@ def calculate_optimal_input(u_liq_usd, c_liq_usd, p_u, p_c):
         ratio = max(p_u, p_c) / min(p_u, p_c)
         optimal_x = (math.sqrt(ratio) - 1) * L
 
-        # User requested $200-$500 flash loans for small caps.
-        # We cap it at $500 but also ensure we don't use more than 5% of L_usd to keep impact low.
-        safe_x = min(optimal_x, L_usd * 0.05)
+        # We use a conservative percentage of the total liquidity
+        # to strictly minimize price impact. 1% is very safe for low caps.
+        safe_x = min(optimal_x, L_usd * 0.01)
 
-        return max(200, min(500, safe_x))
+        # Ensure we always use at least $10 to make it worth the gas if profitable
+        return max(10, safe_x)
     except Exception as e:
         logger.error(f"Error calculating optimal input: {e}")
         return 200 # Default to $200 USDC

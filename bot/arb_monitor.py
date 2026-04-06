@@ -200,9 +200,11 @@ class ArbMonitor:
                                     if self.on_opportunity:
                                         await self.on_opportunity(opp)
             except Exception as e:
-                logger.error(f"WSS Error: {e}. Rotating key and reconnecting in 5s...")
+                # Exponential backoff for 429 / Rate limit errors
+                wait_time = min(60, 5 * (2 ** (key_idx % 3)))
+                logger.error(f"WSS Error: {e}. Rotating key and reconnecting in {wait_time}s...")
                 key_idx += 1
-                await asyncio.sleep(5)
+                await asyncio.sleep(wait_time)
 
     async def static_scanner_loop(self):
         """Run the static scanner every 12 seconds."""
