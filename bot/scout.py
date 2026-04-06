@@ -15,19 +15,23 @@ async def fetch_watchlist():
     potential_tokens = set()
 
     async with httpx.AsyncClient() as client:
-        # 1. Fetch Arbitrum Whitelist
-        logger.info("Fetching official Arbitrum whitelist...")
-        try:
-            url = "https://tokenlist.arbitrum.io/ArbTokenLists/arbed_arb_whitelist_era.json"
-            resp = await client.get(url, timeout=15)
-            if resp.status_code == 200:
-                tokens = resp.json().get("tokens", [])
-                for t in tokens:
-                    if t.get("chainId") == 42161:
-                        addr = t.get("address", "").lower()
-                        if addr: potential_tokens.add(addr)
-        except Exception as e:
-            logger.error(f"Arbitrum Token List fetch failed: {e}")
+        # 1. Fetch Arbitrum Token Lists
+        token_lists = [
+            "https://tokenlist.arbitrum.io/ArbTokenLists/arbed_arb_whitelist_era.json",
+            "https://bridge.arbitrum.io/token-list-42161.json"
+        ]
+        for url in token_lists:
+            logger.info(f"Fetching token list: {url}...")
+            try:
+                resp = await client.get(url, timeout=15)
+                if resp.status_code == 200:
+                    tokens = resp.json().get("tokens", [])
+                    for t in tokens:
+                        if t.get("chainId") == 42161:
+                            addr = t.get("address", "").lower()
+                            if addr: potential_tokens.add(addr)
+            except Exception as e:
+                logger.error(f"Token list {url} fetch failed: {e}")
 
         # 2. Fetch Trending/Boosted Tokens
         logger.info("Fetching trending tokens from DexScreener Boosts...")
@@ -43,11 +47,23 @@ async def fetch_watchlist():
         except Exception as e:
             logger.error(f"DexScreener Boosts fetch failed: {e}")
 
-        # 3. Broad search for Arbitrum tokens
-        queries = ["arbitrum", "camelot", "uniswap", "usdc", "weth", "top", "trending", "gainers", "new", "meme", "pepe", "doge"]
+        # 3. Broad search for Arbitrum tokens using alphabetical discovery
+        import string
+        # Triple the queries to find long-tail low caps
+        search_prefixes = ["arbitrum " + c for c in string.ascii_lowercase + string.digits]
+        camelot_prefixes = ["camelot " + c for c in string.ascii_lowercase + string.digits]
+        univ3_prefixes = ["uniswap " + c for c in string.ascii_lowercase + string.digits]
+
+        # Even more queries to find low caps
+        queries = search_prefixes + camelot_prefixes + univ3_prefixes + [
+            "arbitrum", "camelot", "uniswap", "usdc", "weth", "top", "trending", "gainers", "new", "meme",
+            "pepe", "doge", "shib", "inu", "ai", "base", "token", "coin", "protocol", "dao"
+        ]
+
+        logger.info(f"Starting discovery search with {len(queries)} queries...")
         for q in queries:
             try:
-                url = f"https://api.dexscreener.com/latest/dex/search/?q={q}"
+                url = f"https://api.dexscreener.com/latest/dex/search/?q={q.replace(' ', '%20')}"
                 resp = await client.get(url, timeout=15)
                 if resp.status_code == 200:
                     pairs = resp.json().get("pairs", [])
@@ -55,7 +71,8 @@ async def fetch_watchlist():
                         if p.get("chainId") == "arbitrum":
                             addr = p.get("baseToken", {}).get("address", "").lower()
                             if addr: potential_tokens.add(addr)
-                await asyncio.sleep(0.3)
+                # Quick sleep to stay under potential global rate limits
+                await asyncio.sleep(0.1)
             except Exception as e:
                 logger.error(f"DexScreener search failed for {q}: {e}")
 
@@ -116,8 +133,8 @@ async def fetch_watchlist():
                             liq = float(best_c.get("liquidity", {}).get("usd", 0) or 0)
                             symbol = best_c.get("baseToken", {}).get("symbol")
 
-                            # Filtering ($10k - $250M Mcap - wider reach)
-                            if (10_000 <= mcap <= 250_000_000) and (1_000 <= liq <= 5_000_000):
+                        # Filtering (Catch all for low caps)
+                        if (liq >= 100):
                                 watchlist.append({
                                     "address": checksum(addr),
                                     "symbol": symbol,

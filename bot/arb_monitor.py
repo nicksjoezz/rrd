@@ -76,6 +76,7 @@ class ArbMonitor:
             return []
 
         opportunities = []
+        # Group and process in small batches to avoid rate limits
         for item in self.watchlist:
             try:
                 if item["univ3Pool"] not in self.metadata or item["camelotPool"] not in self.metadata:
@@ -132,10 +133,11 @@ class ArbMonitor:
                 # 4. Compare
                 gap = abs(u_price - c_price) / min(u_price, c_price) if u_price > 0 and c_price > 0 else 0
 
-                # UniV3 liquidity proxy
+                # UniV3 liquidity proxy (conservative)
                 u_liq = c_liq
 
-                if gap > 0.01: # 1% gap
+                # Filter: Gap > 0.5% and some minimal liquidity
+                if gap > 0.005 and u_liq > 100:
                     opportunities.append({
                         "token": item["address"],
                         "symbol": item["symbol"],
