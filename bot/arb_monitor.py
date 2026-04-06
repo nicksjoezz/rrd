@@ -18,7 +18,7 @@ class ArbMonitor:
     def __init__(self, on_opportunity=None):
         self.on_opportunity = on_opportunity
         self.watchlist = []
-        self.metadata = {} # pool_addr -> {token0, token1, dec0, dec1}
+        self.metadata = {} # pool_addr -> {token0, token1, dec0, dec1, is_token1_quote}
         self.w3 = get_web3()
         self.mc = self.w3.eth.contract(address=MULTICALL3_ADDR, abi=MULTICALL3_ABI)
         self._load_watchlist()
@@ -33,6 +33,7 @@ class ArbMonitor:
         """Fetch tokens and decimals for all pools in watchlist."""
         usdc_v1 = "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8".lower()
         usdc_v2 = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831".lower()
+        weth = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1".lower()
         new_pools = [p for p in self.watchlist if p["univ3Pool"] not in self.metadata or p["camelotPool"] not in self.metadata]
         if not new_pools: return
 
@@ -49,7 +50,7 @@ class ArbMonitor:
                 c_t0 = c_pool.functions.token0().call().lower()
                 c_t1 = c_pool.functions.token1().call().lower()
 
-                # Fetch decimals for all 4 tokens
+                # Fetch decimals
                 tokens = list(set([u_t0, u_t1, c_t0, c_t1]))
                 token_decimals = {}
                 for t in tokens:
@@ -59,18 +60,18 @@ class ArbMonitor:
                 self.metadata[p["univ3Pool"]] = {
                     "token0": u_t0, "token1": u_t1,
                     "dec0": token_decimals.get(u_t0, 18), "dec1": token_decimals.get(u_t1, 18),
-                    "is_token1_usdc": u_t1 in [usdc_v1, usdc_v2]
+                    "is_token1_quote": u_t1 in [usdc_v1, usdc_v2, weth]
                 }
                 self.metadata[p["camelotPool"]] = {
                     "token0": c_t0, "token1": c_t1,
                     "dec0": token_decimals.get(c_t0, 18), "dec1": token_decimals.get(c_t1, 18),
-                    "is_token1_usdc": c_t1 in [usdc_v1, usdc_v2]
+                    "is_token1_quote": c_t1 in [usdc_v1, usdc_v2, weth]
                 }
             except Exception as e:
                 logger.error(f"Failed to fetch metadata for {p['symbol']}: {e}")
 
     def check_all_prices_multicall(self):
-        """Batch all price checks into one Multicall3 call."""
+        """Fetch prices for all tokens in watchlist."""
         if not self.watchlist:
             return []
 
@@ -80,67 +81,72 @@ class ArbMonitor:
                 if item["univ3Pool"] not in self.metadata or item["camelotPool"] not in self.metadata:
                     continue
 
-                u_pool = self.w3.eth.contract(address=checksum(item["univ3Pool"]), abi=UNIV3_POOL_ABI)
-                c_pool = self.w3.eth.contract(address=checksum(item["camelotPool"]), abi=CAMELOT_POOL_ABI)
-
-                # Use Multicall for just this pair to isolate failures
-                pair_calls = [
-                    {"target": checksum(item["univ3Pool"]), "callData": u_pool.encodeABI("slot0")},
-                    {"target": checksum(item["camelotPool"]), "callData": c_pool.encodeABI("getReserves")}
-                ]
-                _, return_data = self.mc.functions.aggregate(pair_calls).call()
-
                 u_meta = self.metadata[item["univ3Pool"]]
                 c_meta = self.metadata[item["camelotPool"]]
+                is_c_v3 = item.get("isCamelotV3", False)
 
-                # Decode UniV3 slot0
-                u_dec = self.w3.codec.decode(["uint160", "int24", "uint16", "uint16", "uint16", "uint8", "bool"], return_data[0])
+                # 1. Fetch Data
+                u_pool = self.w3.eth.contract(address=checksum(item["univ3Pool"]), abi=UNIV3_POOL_ABI)
+                u_data = self.w3.eth.call({"to": checksum(item["univ3Pool"]), "data": u_pool.encodeABI("slot0")})
+
+                if is_c_v3:
+                    c_data = self.w3.eth.call({"to": checksum(item["camelotPool"]), "data": "0x3850c7bd"}) # globalState
+                else:
+                    c_pool = self.w3.eth.contract(address=checksum(item["camelotPool"]), abi=CAMELOT_POOL_ABI)
+                    c_data = self.w3.eth.call({"to": checksum(item["camelotPool"]), "data": c_pool.encodeABI("getReserves")})
+
+                # 2. Decode UniV3 Price
+                u_dec = self.w3.codec.decode(["uint160", "int24", "uint16", "uint16", "uint16", "uint8", "bool"], u_data)
                 sqrtPriceX96 = u_dec[0]
-
-                # Price = (sqrtPriceX96 / 2^96)^2 * 10^(dec0 - dec1)
-                # This gives price of token0 in terms of token1
                 raw_u_price = (sqrtPriceX96 / (2**96))**2
                 u_price_t0_in_t1 = raw_u_price * (10**u_meta["dec0"] / 10**u_meta["dec1"])
 
-                # We want price of TokenX in USDC
-                if u_meta["is_token1_usdc"]: # TokenX is token0
+                if u_meta["is_token1_quote"]:
                     u_price = u_price_t0_in_t1
-                else: # TokenX is token1, USDC is token0
+                else:
                     u_price = 1 / u_price_t0_in_t1 if u_price_t0_in_t1 > 0 else 0
 
-                # Decode Camelot getReserves
-                c_dec = self.w3.codec.decode(["uint112", "uint112", "uint32"], return_data[1])
-                res0, res1 = c_dec[0], c_dec[1]
-
-                # Price of t0 in t1 = (res1 / 10^dec1) / (res0 / 10^dec0)
-                if res0 > 0:
-                    c_price_t0_in_t1 = (res1 / 10**c_meta["dec1"]) / (res0 / 10**c_meta["dec0"])
+                # 3. Decode Camelot Price
+                if is_c_v3:
+                    sqrtP = self.w3.codec.decode(["uint160"], c_data[:32])[0]
+                    c_price_t0_in_t1 = (sqrtP / (2**96))**2 * (10**c_meta["dec0"] / 10**c_meta["dec1"])
+                    c_liq = item.get("liq", 10000)
                 else:
-                    c_price_t0_in_t1 = 0
+                    c_dec = self.w3.codec.decode(["uint112", "uint112", "uint32"], c_data)
+                    res0, res1 = c_dec[0], c_dec[1]
+                    if res0 > 0:
+                        c_price_t0_in_t1 = (res1 / 10**c_meta["dec1"]) / (res0 / 10**c_meta["dec0"])
+                    else:
+                        c_price_t0_in_t1 = 0
 
-                if c_meta["is_token1_usdc"]:
+                    if c_meta["is_token1_quote"]:
+                        c_liq = (res1 / 10**c_meta["dec1"]) * 2
+                    else:
+                        c_liq = (res0 / 10**c_meta["dec0"]) * 2
+
+                if c_meta["is_token1_quote"]:
                     c_price = c_price_t0_in_t1
                 else:
                     c_price = 1 / c_price_t0_in_t1 if c_price_t0_in_t1 > 0 else 0
 
-                # Liquidity proxy (V2 style USD value in pool)
-                # Roughly res0_in_usd + res1_in_usd
-                if c_meta["is_token1_usdc"]:
-                    liquidity = (res1 / 10**c_meta["dec1"]) * 2
-                else:
-                    liquidity = (res0 / 10**c_meta["dec0"]) * 2
-
+                # 4. Compare
                 gap = abs(u_price - c_price) / min(u_price, c_price) if u_price > 0 and c_price > 0 else 0
-                if gap > 0.02: # 2% gap
+
+                # UniV3 liquidity proxy
+                u_liq = c_liq
+
+                if gap > 0.01: # 1% gap
                     opportunities.append({
                         "token": item["address"],
                         "symbol": item["symbol"],
                         "gap": gap,
                         "u_price": u_price,
                         "c_price": c_price,
-                        "liquidity": liquidity,
+                        "u_liq": u_liq,
+                        "c_liq": c_liq,
                         "univ3Pool": item["univ3Pool"],
-                        "camelotPool": item["camelotPool"]
+                        "camelotPool": item["camelotPool"],
+                        "isCamelotV3": is_c_v3
                     })
             except Exception as e:
                 logger.error(f"Price check failed for {item['symbol']}: {e}")
@@ -148,24 +154,22 @@ class ArbMonitor:
         return opportunities
 
     async def event_listener(self):
-        """Subscribe to Swap topics on watchlist addresses via WebSockets."""
-        # Use first available alchemy key for WSS
+        """Subscribe to Swap topics on watchlist addresses via WebSockets with key rotation."""
         keys = cfg("network", "alchemy_keys")
         if not keys:
             logger.warning("No Alchemy keys for WSS. Event listener disabled.")
             return
 
-        # wss://arb-mainnet.g.alchemy.com/v2/KEY
-        key = keys[0]
-        wss_url = f"wss://arb-mainnet.g.alchemy.com/v2/{key}"
         SWAP_TOPIC = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
-
-        logger.info(f"Starting WebSocket event listener on {wss_url}...")
-
         from websockets import connect
         import json
 
+        key_idx = 0
         while True:
+            key = keys[key_idx % len(keys)]
+            wss_url = f"wss://arb-mainnet.g.alchemy.com/v2/{key}"
+            logger.info(f"Connecting to WSS with key index {key_idx % len(keys)}...")
+
             try:
                 async with connect(wss_url) as ws:
                     subscribe_msg = {
@@ -184,22 +188,20 @@ class ArbMonitor:
                         result = params.get("result", {})
                         emitter = result.get("address", "").lower()
 
-                        # Check if emitter is in our watchlist
                         match = next((item for item in self.watchlist
                                     if item["univ3Pool"].lower() == emitter
                                     or item["camelotPool"].lower() == emitter), None)
 
                         if match:
                             logger.info(f"Swap event detected on watched pool: {emitter}")
-                            # Trigger immediate price check for this token
-                            # To keep it simple, we reuse check_all_prices_multicall but could optimize
                             opps = self.check_all_prices_multicall()
                             for opp in opps:
                                 if opp["token"].lower() == match["address"].lower():
                                     if self.on_opportunity:
                                         await self.on_opportunity(opp)
             except Exception as e:
-                logger.error(f"WSS Error: {e}. Reconnecting in 5s...")
+                logger.error(f"WSS Error: {e}. Rotating key and reconnecting in 5s...")
+                key_idx += 1
                 await asyncio.sleep(5)
 
     async def static_scanner_loop(self):

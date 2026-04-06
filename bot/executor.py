@@ -17,7 +17,8 @@ ARB_CONTRACT_ABI = [
      {"name":"tokenUSDC","type":"address"},
      {"name":"amountUSDC","type":"uint256"},
      {"name":"uniV3Fee","type":"uint24"},
-     {"name":"minProfit","type":"uint256"}
+     {"name":"minProfit","type":"uint256"},
+     {"name":"isCamelotV3","type":"bool"}
    ],"outputs":[]},
   {"name":"withdraw","type":"function","stateMutability":"nonpayable",
    "inputs":[{"name":"token","type":"address"}],"outputs":[]},
@@ -60,7 +61,7 @@ class ArbExecutor:
             f"Wallet: {acc_str}"
         )
 
-    def _build_tx(self, opportunity: dict, amount_usdc: int, min_profit: int) -> dict:
+    def _build_tx(self, opportunity: dict, amount_usdc: int, min_profit: int, is_c_v3: bool) -> dict:
         """Build the arbitrage transaction."""
         flash_pool = opportunity["univ3Pool"]
         token_x = opportunity["token"]
@@ -75,7 +76,8 @@ class ArbExecutor:
             checksum(token_usdc),
             amount_usdc,
             uni_v3_fee,
-            min_profit
+            min_profit,
+            is_c_v3
         ).build_transaction({
             "from":    self._account.address,
             "nonce":   nonce,
@@ -92,20 +94,22 @@ class ArbExecutor:
         token_usdc_decimals = cfg("tokens", "USDC", "decimals")
 
         # Calculate optimal amount based on liquidity and price gap
-        liquidity = opportunity.get("liquidity", 1000)
+        u_liq = opportunity.get("u_liq", 1000)
+        c_liq = opportunity.get("c_liq", 1000)
         p_u = opportunity["u_price"]
         p_c = opportunity["c_price"]
 
-        amount_usd = calculate_optimal_input(liquidity, p_u, p_c)
+        amount_usd = calculate_optimal_input(u_liq, c_liq, p_u, p_c)
         amount_usdc_wei = int(amount_usd * (10 ** token_usdc_decimals))
         min_profit_usd = cfg("strategy", "min_profit_usd")
         min_profit_wei = int(min_profit_usd * (10 ** token_usdc_decimals))
 
+        is_c_v3 = opportunity.get("isCamelotV3", False)
         if not self._contract or not self._account:
-            logger.info(f"[{mode.upper()}] Arbitrage simulation (Dry Run) | Token: {opportunity['symbol']}")
+            logger.info(f"[{mode.upper()}] Arbitrage simulation (Dry Run) | Token: {opportunity['symbol']} | CamV3: {is_c_v3}")
             return None
 
-        tx = self._build_tx(opportunity, amount_usdc_wei, min_profit_wei)
+        tx = self._build_tx(opportunity, amount_usdc_wei, min_profit_wei, is_c_v3)
 
         try:
             if mode == "simulate":
