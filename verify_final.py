@@ -2,8 +2,8 @@ import os, time, json
 from playwright.sync_api import sync_playwright
 
 def run_cuj(page):
-    # App is running on 5003
-    page.goto("http://localhost:5003")
+    # App is running on 5000
+    page.goto("http://localhost:5000")
     page.wait_for_timeout(2000)
 
     # Check for 404/405 errors in console
@@ -11,20 +11,20 @@ def run_cuj(page):
 
     # 1. Verify /api/mode (GET)
     print("Verifying /api/mode...")
-    response = page.request.get("http://localhost:5003/api/mode")
+    response = page.request.get("http://localhost:5000/api/mode")
     print(f"Status: {response.status}, JSON: {response.json()}")
     assert response.status == 200
     assert "mode" in response.json()
 
     # 2. Verify /api/profit-history
     print("Verifying /api/profit-history...")
-    response = page.request.get("http://localhost:5003/api/profit-history")
+    response = page.request.get("http://localhost:5000/api/profit-history")
     print(f"Status: {response.status}, JSON: {response.json()}")
     assert response.status == 200
 
     # 3. Verify /api/logs
     print("Verifying /api/logs...")
-    response = page.request.get("http://localhost:5003/api/logs?lines=10")
+    response = page.request.get("http://localhost:5000/api/logs?lines=10")
     print(f"Status: {response.status}, JSON: {response.json()}")
     assert response.status == 200
     assert "logs" in response.json()

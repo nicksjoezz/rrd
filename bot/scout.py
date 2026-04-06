@@ -7,92 +7,78 @@ from .utils import ROOT_DIR, logger
 
 WATCHLIST_PATH = ROOT_DIR / "logs" / "watchlist.json"
 
-async def fetch_small_caps():
-    """Fetch tokens from DexScreener for Arbitrum."""
-    try:
-        url = "https://api.dexscreener.com/latest/dex/search/?q=arbitrum"
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=15)
-            if response.status_code != 200:
-                logger.error(f"DexScreener API error: {response.status_code}")
-                return []
-
-            data = response.json()
-            return data.get("pairs", [])
-    except Exception as e:
-        logger.error(f"Error fetching tokens from DexScreener: {e}")
-        return []
-
-def filter_tokens(pairs):
+async def fetch_watchlist():
     """
-    Filter pairs based on:
-    - Chain: arbitrum
-    - Market Cap: $100k - $5M
-    - Liquidity: $15k - $100k
-    - Dual-Listed: The token must have a pair on Camelot AND Uniswap V3.
+    Fetch tokens from DexScreener and filter for dual-listed small caps.
+    Uses the /search and /tokens endpoints for robustness.
     """
     filtered = []
+    candidates = []
 
-    # Track tokens and their pools
-    token_pools = {} # token_address -> { 'camelot': pool_addr, 'univ3': pool_addr, 'symbol': sym }
+    async with httpx.AsyncClient() as client:
+        # 1. Broad search for Camelot pairs on Arbitrum
+        logger.info("Fetching candidates from Camelot...")
+        try:
+            url = "https://api.dexscreener.com/latest/dex/search/?q=camelot"
+            resp = await client.get(url, timeout=15)
+            if resp.status_code == 200:
+                pairs = resp.json().get("pairs", [])
+                for p in pairs:
+                    # Filter for Arbitrum, Camelot, and explicitly V2 pairs if possible
+                    # Camelot V2 pairs usually don't have a label, V3/Algebra do.
+                    labels = p.get("labels", [])
+                    if p.get("chainId") == "arbitrum" and p.get("dexId") == "camelot" and not labels:
+                        mcap = float(p.get("fdv", 0) or 0)
+                        liq = float(p.get("liquidity", {}).get("usd", 0) or 0)
 
-    for p in pairs:
-        if p.get("chainId") != "arbitrum":
-            continue
+                        # Apply initial Mcap/Liquidity filters
+                        # Plan: $100k - $5M Mcap, $15k - $100k Liq
+                        if (80_000 <= mcap <= 6_000_000) and (10_000 <= liq <= 150_000):
+                            candidates.append({
+                                "address": p.get("baseToken", {}).get("address"),
+                                "symbol": p.get("baseToken", {}).get("symbol"),
+                                "camelotPool": p.get("pairAddress"),
+                                "mcap": mcap,
+                                "liq": liq
+                            })
+        except Exception as e:
+            logger.error(f"Error fetching Camelot candidates: {e}")
 
-        base_token = p.get("baseToken", {})
-        token_addr = base_token.get("address")
-        if not token_addr:
-            continue
+        logger.info(f"Found {len(candidates)} candidates. Checking for Uniswap V3 dual-listings...")
 
-        # Check if it's USDC or WETH pair (we want to arbitrage against USDC)
-        quote_token = p.get("quoteToken", {})
-        if quote_token.get("symbol") not in ["USDC", "USDT", "WETH"]:
-            continue
+        # 2. For each candidate, check for a Uniswap V3 pair
+        for c in candidates:
+            try:
+                url = f"https://api.dexscreener.com/latest/dex/tokens/{c['address']}"
+                resp = await client.get(url, timeout=15)
+                if resp.status_code == 200:
+                    pairs = resp.json().get("pairs", [])
+                    uni_pool = None
+                    for p in pairs:
+                        if p.get("chainId") == "arbitrum" and p.get("dexId") == "uniswap":
+                            labels = p.get("labels", [])
+                            if "v2" not in labels:
+                                uni_pool = p.get("pairAddress")
+                                break
 
-        mcap = float(p.get("fdv", 0) or 0)
-        liquidity = float(p.get("liquidity", {}).get("usd", 0) or 0)
-        dex_id = p.get("dexId")
-
-        # Filter by MCAP and Liquidity
-        if not (50_000 <= mcap <= 10_000_000): # Relaxed for testing
-            continue
-        if not (5_000 <= liquidity <= 500_000): # Relaxed for testing
-            continue
-
-        if token_addr not in token_pools:
-            token_pools[token_addr] = {"symbol": base_token.get("symbol"), "pools": {}}
-
-        if dex_id == "uniswap": # DexScreener uses uniswap for v3/v2
-            token_pools[token_addr]["pools"]["univ3"] = p.get("pairAddress")
-        elif dex_id == "camelot":
-            token_pools[token_addr]["pools"]["camelot"] = p.get("pairAddress")
-
-    # Final pass: check for dual listing
-    for addr, info in token_pools.items():
-        if "camelot" in info["pools"] and "univ3" in info["pools"]:
-            filtered.append({
-                "address": addr,
-                "symbol": info["symbol"],
-                "camelotPool": info["pools"]["camelot"],
-                "univ3Pool": info["pools"]["univ3"]
-            })
-
-    # Fallback if no dual-listed tokens found (mock data for demo)
-    if not filtered:
-        filtered.append({
-            "address": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", # USDC (mocking a pair)
-            "symbol": "MOCK-ARB",
-            "camelotPool": "0x8d9633e72eE3696898A1900F25A03223004313B0",
-            "univ3Pool": "0xBe90367376510F431A796987474479904D9698A5"
-        })
+                    if uni_pool:
+                        filtered.append({
+                            "address": c["address"],
+                            "symbol": c["symbol"],
+                            "camelotPool": c["camelotPool"],
+                            "univ3Pool": uni_pool,
+                            "mcap": c["mcap"],
+                            "liq": c["liq"]
+                        })
+                await asyncio.sleep(0.5) # Be nice to API
+            except Exception as e:
+                logger.error(f"Error checking dual-listing for {c['symbol']}: {e}")
 
     return filtered
 
 async def update_watchlist():
     logger.info("Scouting for arbitrage-ready tokens...")
-    pairs = await fetch_small_caps()
-    watchlist = filter_tokens(pairs)
+    watchlist = await fetch_watchlist()
 
     with open(WATCHLIST_PATH, "w") as f:
         json.dump(watchlist, f, indent=2)
