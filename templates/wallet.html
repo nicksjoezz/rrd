@@ -69,6 +69,7 @@
 }
 .health-run-row {
   display: flex; align-items: center; gap: 16px; margin-bottom: 20px;
+  flex-wrap: wrap;
 }
 .health-results { display: none; }
 .health-results.show { display: block; }
@@ -84,7 +85,13 @@
 }
 .check-name {
   font-family: var(--font-hud); font-size: 10px; letter-spacing: 0.1em;
-  color: var(--text-dim); min-width: 200px; flex-shrink: 0;
+  color: var(--text-dim); min-width: 150px; flex-shrink: 0;
+}
+
+@media (max-width: 600px) {
+  .check-item { flex-direction: column; gap: 4px; }
+  .check-name { min-width: unset; }
+  .total-row { flex-direction: column; gap: 10px; text-align: center; }
 }
 .check-detail { font-size: 11px; color: var(--text-lo); flex: 1; }
 .check-item.ok     .check-icon { color: var(--green); }

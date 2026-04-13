@@ -172,6 +172,20 @@ DATA_PROVIDER_ABI = json.loads('''[
      {"name":"liquidityRate","type":"uint256"},
      {"name":"stableRateLastUpdated","type":"uint40"},
      {"name":"usageAsCollateralEnabled","type":"bool"}
+   ]},
+  {"name":"getReserveConfigurationData","type":"function","stateMutability":"view",
+   "inputs":[{"name":"asset","type":"address"}],
+   "outputs":[
+     {"name":"decimals","type":"uint256"},
+     {"name":"ltv","type":"uint256"},
+     {"name":"liquidationThreshold","type":"uint256"},
+     {"name":"liquidationBonus","type":"uint256"},
+     {"name":"reserveFactor","type":"uint256"},
+     {"name":"usageAsCollateralEnabled","type":"bool"},
+     {"name":"borrowingEnabled","type":"bool"},
+     {"name":"stableBorrowRateEnabled","type":"bool"},
+     {"name":"isActive","type":"bool"},
+     {"name":"isFrozen","type":"bool"}
    ]}
 ]''')
 
@@ -207,7 +221,18 @@ LIQUIDATOR_CONTRACT_ABI = json.loads('''[
      {"name":"borrower","type":"address"},
      {"name":"debtAmount","type":"uint256"},
      {"name":"lendingPool","type":"address"},
-     {"name":"swapFee","type":"uint24"}
+     {"name":"swapFee","type":"uint24"},
+     {"name":"minProfit","type":"uint256"}
+   ],"outputs":[]},
+  {"name":"executeLiquidationMultiHop","type":"function","stateMutability":"nonpayable",
+   "inputs":[
+     {"name":"debtToken","type":"address"},
+     {"name":"collateralToken","type":"address"},
+     {"name":"borrower","type":"address"},
+     {"name":"debtAmount","type":"uint256"},
+     {"name":"lendingPool","type":"address"},
+     {"name":"swapPath","type":"bytes"},
+     {"name":"minProfit","type":"uint256"}
    ],"outputs":[]},
   {"name":"withdraw","type":"function","stateMutability":"nonpayable",
    "inputs":[{"name":"token","type":"address"}],"outputs":[]},
@@ -215,8 +240,21 @@ LIQUIDATOR_CONTRACT_ABI = json.loads('''[
    "inputs":[],"outputs":[{"type":"address"}]}
 ]''')
 
+AAVE_ORACLE_ABI = json.loads('''[
+  {"name":"getAssetPrice","type":"function","stateMutability":"view",
+   "inputs":[{"name":"asset","type":"address"}],"outputs":[{"type":"uint256"}]}
+]''')
+
+ADDRESSES_PROVIDER_ABI = json.loads('''[
+  {"name":"getPriceOracle","type":"function","stateMutability":"view",
+   "inputs":[],"outputs":[{"type":"address"}]}
+]''')
+
 # ── Multicall3 (Arbitrum) ───────────────────────────────────────────────────
-MULTICALL3_ADDR = "0xcA11bde05977b3631167028862bE2a173976CA11"
+def get_multicall3_addr() -> str:
+    return cfg("network", "multicall3")
+
+MULTICALL3_ADDR = get_multicall3_addr()
 MULTICALL3_ABI  = json.loads('[{"inputs":[{"components":[{"internalType":"address","name":"target","type":"address"},{"internalType":"bytes","name":"callData","type":"bytes"}],"internalType":"struct Multicall3.Call[]","name":"calls","type":"tuple[]"}],"name":"aggregate","outputs":[{"internalType":"uint256","name":"blockNumber","type":"uint256"},{"internalType":"bytes[]","name":"returnData","type":"bytes[]"}],"stateMutability":"payable","type":"function"}]')
 
 # ── Token helpers ─────────────────────────────────────────────────────────────

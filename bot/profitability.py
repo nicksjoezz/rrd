@@ -4,10 +4,13 @@ Accounts for: flash loan fee, swap slippage, gas cost, liquidation bonus
 """
 
 import logging
+import requests
+from typing import Optional
 from web3 import Web3
 from .utils import (
     get_web3, cfg, get_token_map, checksum,
-    wei_to_usd_base, ERC20_ABI, CHAINLINK_FEED_ABI
+    wei_to_usd_base, ERC20_ABI, CHAINLINK_FEED_ABI,
+    AAVE_ORACLE_ABI, ADDRESSES_PROVIDER_ABI
 )
 
 logger = logging.getLogger("liquidation_bot.profit")
@@ -15,6 +18,38 @@ logger = logging.getLogger("liquidation_bot.profit")
 # Cache prices to avoid hammering RPC
 _price_cache: dict = {}
 _price_cache_block: int = 0
+_aave_oracle_addr: Optional[str] = None
+
+_cg_eth_cache: float = 0.0
+_cg_eth_time: float = 0.0
+
+def _get_aave_oracle() -> Optional[str]:
+    global _aave_oracle_addr
+    if _aave_oracle_addr: return _aave_oracle_addr
+    try:
+        w3 = get_web3()
+        # Aave V3 Pool Addresses Provider on Arbitrum
+        provider_addr = cfg("protocols", "aave_v3", "addresses_provider")
+        provider = w3.eth.contract(address=checksum(provider_addr), abi=ADDRESSES_PROVIDER_ABI)
+        _aave_oracle_addr = provider.functions.getPriceOracle().call()
+        return _aave_oracle_addr
+    except Exception: return None
+
+def _get_coingecko_eth_price() -> float:
+    """Final fallback for ETH price (with 60s cache)."""
+    global _cg_eth_cache, _cg_eth_time
+    now = time.time()
+    if now - _cg_eth_time < 60 and _cg_eth_cache > 0:
+        return _cg_eth_cache
+
+    try:
+        r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd", timeout=5)
+        price = float(r.json()["ethereum"]["usd"])
+        if price > 0:
+            _cg_eth_cache = price
+            _cg_eth_time = now
+        return price
+    except Exception: return _cg_eth_cache
 
 def get_token_price_usd(token_address: str) -> float:
     """
@@ -53,11 +88,27 @@ def get_token_price_usd(token_address: str) -> float:
             except Exception as e:
                 logger.debug(f"Chainlink price fetch failed for {sym}: {e}")
 
-    # Fallback: rough price from known stables
-    if token_info:
-        sym = token_info["symbol"]
-        if sym in ("USDC", "USDCe", "USDT", "DAI", "GHO"):
-            return 1.0
+
+    # Fallback 2: Aave Oracle
+    oracle_addr = _get_aave_oracle()
+    if oracle_addr:
+        try:
+            oracle = w3.eth.contract(address=checksum(oracle_addr), abi=AAVE_ORACLE_ABI)
+            # Aave reports in 8 decimals for USD base
+            price = oracle.functions.getAssetPrice(checksum(token_address)).call() / 1e8
+            if price > 0:
+                _price_cache[addr] = price
+                _price_cache_block = current_block
+                return price
+        except Exception: pass
+
+    # Fallback 3: CoinGecko (ETH only, lazy fetch)
+    if addr == cfg("network", "weth").lower():
+        price = _get_coingecko_eth_price()
+        if price > 0:
+            _price_cache[addr] = price
+            _price_cache_block = current_block
+            return price
 
     return 0.0  # Unknown — will be excluded from profitability check
 
@@ -95,10 +146,8 @@ def estimate_profit_usd(position: dict) -> dict:
     debt_price  = get_token_price_usd(debt_addr)
     col_price   = get_token_price_usd(col_addr)
 
-    if debt_price == 0 or col_price == 0:
-        # Fall back to Aave's reported base unit values
-        debt_price = 1.0
-        col_price  = 1.0
+    if debt_price <= 0 or col_price <= 0:
+        return {"profitable": False, "reason": "Missing live price data"}
 
     position["debt_price"] = debt_price
     position["col_price"]  = col_price
@@ -117,9 +166,9 @@ def estimate_profit_usd(position: dict) -> dict:
     # Gas estimate (Arbitrum L2 + approximate L1 calldata fee)
     gas_limit       = cfg("gas", "gas_limit")
     max_fee_gwei    = cfg("gas", "max_fee_per_gas_gwei")
-    eth_price       = get_token_price_usd("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1")
-    if eth_price == 0:
-        eth_price = cfg("oracle", "fallback_eth_price") or 3000.0
+    eth_price       = get_token_price_usd(cfg("network", "weth"))
+    if eth_price <= 0:
+        return {"profitable": False, "reason": "ETH price unavailable for gas estimation"}
 
     # L2 Execution cost
     l2_gas_cost_eth = (gas_limit * max_fee_gwei * 1e9) / 1e18

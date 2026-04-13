@@ -13,7 +13,7 @@ For a terminal opportunity snapshot:
     python scan_test.py
 """
 
-import os, sys, time, json, sqlite3, logging, argparse, threading
+import os, sys, time, json, logging, argparse, threading
 from pathlib import Path
 
 from flask import Flask, render_template, jsonify, request
@@ -49,6 +49,7 @@ def start_bot_engine():
             return False
         _bot_running.set()
         threading.Thread(target=_bot_loop, daemon=True, name="bot-engine").start()
+        # discovery_loop is now unified into bot_loop to ensure immediate execution
         logger.info("Bot engine started -- scanning 24/7")
         return True
 
@@ -60,7 +61,7 @@ def stop_bot_engine():
         logger.info("Bot engine stopping...")
         return True
 
-# -- Bot loop -- runs 24/7, executes immediately when opportunities found --------
+# ── 1. Real-Time Monitor & Executor Loop ──────────────────────────────────────
 def _bot_loop():
     try:
         from bot.monitor         import MultiProtocolMonitor
@@ -74,9 +75,21 @@ def _bot_loop():
         from bot.ws_streamer     import WebSocketStreamer
         from bot.emode_detector  import flag_emode_risk_positions
 
-        monitor  = MultiProtocolMonitor()
         executor = LiquidationExecutor()
         tuner    = get_tuner()
+
+        def _immediate_execution_callback(positions):
+            """Callback for high-priority immediate execution from streaming discovery."""
+            logger.info(f"[STREAM] Immediate execution triggered for {len(positions)} positions")
+            # Run execution in a separate thread so discovery is not blocked
+            threading.Thread(
+                target=_process_and_execute,
+                args=(positions, executor, tuner),
+                daemon=True,
+                name=f"exec-{int(time.time())}"
+            ).start()
+
+        monitor  = MultiProtocolMonitor(on_liquidatable=_immediate_execution_callback)
         _emerg   = threading.Event()
 
         # ── Emergency scan triggers ───────────────────────────────────────────
@@ -99,6 +112,21 @@ def _bot_loop():
         # immediate priority re-check rather than waiting for next cycle
         streamer = WebSocketStreamer()
         streamer.start()
+
+        # Load manually added/persistent zombies into monitors
+        # We also need to add these to the monitor discovery list
+        from bot.zombie_queue import get_zombie_queue
+        zq = get_zombie_queue(
+            entry_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("entry_hf", 1.05)),
+            fire_hf=(load_config().get("strategy", {}).get("zombie_queue", {}).get("fire_hf", 1.0))
+        )
+        zombies = zq.get_watching()
+        for z in zombies:
+            proto = z.get("protocol")
+            user  = z.get("user")
+            if proto and user and proto in monitor.monitors:
+                monitor.monitors[proto]._borrowers.add(user.lower())
+                logger.info(f"[ZOMBIE] Loaded {user[:8]} from persistence into {proto} monitor")
 
         # ── Load borrowers ────────────────────────────────────────────────────
         logger.info("Loading borrower history (DB cache -> event scan)...")
@@ -190,45 +218,45 @@ def _bot_loop():
         logger.info("Bot engine stopped")
 
 
-def _scan_and_execute(monitor, executor, tuner, emergency=False):
+def _process_and_execute(positions, executor, tuner):
     """
-    Full scan → score → filter → execute pipeline.
-    Called every cycle AND immediately on oracle/mempool signals.
-    Returns number of opportunities found.
+    Core execution pipeline: Enrich → Score → Rank → Fire.
+    Shared by both the main loop and immediate streaming callbacks.
     """
     from bot.profitability  import rank_positions
     from bot.risk_scorer    import rank_by_score
     from bot.emode_detector import flag_emode_risk_positions
     from bot.gas_manager    import is_gas_spike
 
-    # Skip gas spikes unless it's an emergency scan
-    if not emergency and is_gas_spike():
-        logger.warning("Gas spike detected -- skipping non-emergency scan")
-        return 0
-
-    # Scan all enabled protocols
-    positions = monitor.scan_all_protocols()
     if not positions:
-        logger.info("No positions near liquidation threshold")
         return 0
 
     # Enrich with E-Mode data (ETH LST depeg awareness)
     positions = flag_emode_risk_positions(positions)
 
-    # Velocity: bubble fast-falling positions to the top
-    fast = monitor.velocity.get_fast_falling(positions, velocity_threshold=-0.03)
-    if fast:
-        logger.info(f"[!] {len(fast)} fast-falling position(s) detected -- priority execution")
-        positions = fast + [p for p in positions if p not in fast]
+    # Filter out skipped collaterals
+    effective_params = tuner.get_effective_params()
+    skip_collaterals = set(effective_params.get("collateral_skip", []))
 
-    # Score by 7-factor composite (profit, bonus, urgency, velocity, size, liquidity, emode)
-    skip   = set(tuner.get_effective_params().get("collateral_skip", []))
-    ranked = rank_positions(rank_by_score(
-        [p for p in positions if p.get("collateral_symbol") not in skip]
-    ))
+    scored_positions = rank_by_score(
+        [p for p in positions if p.get("collateral_symbol") not in skip_collaterals]
+    )
+
+    # Identify positions that are at-risk but might be filtered out
+    for p in scored_positions:
+        if p.get("health_factor", 2.0) <= 1.0:
+            logger.info(f"[CRITICAL] Found liquidatable position: {p['user']} HF={p['health_factor']:.4f} "
+                        f"Debt=${p.get('total_debt_usd',0):.0f}")
+
+    ranked = rank_positions(scored_positions)
 
     if not ranked:
-        logger.info("No profitable positions after scoring and filtering")
+        # Check if we skipped any truly liquidatable ones
+        liquidatable_count = len([p for p in scored_positions if p.get("health_factor", 2.0) <= 1.0])
+        if liquidatable_count > 0:
+            logger.warning(f"Skipped {liquidatable_count} liquidatable positions because they were unprofitable or lacked routes.")
+        else:
+            logger.info("No profitable positions after scoring and filtering")
         return 0
 
     mode = (load_config() or {}).get("mode", "live")
@@ -267,6 +295,35 @@ def _scan_and_execute(monitor, executor, tuner, emergency=False):
 
     return len(ranked)
 
+def _scan_and_execute(monitor, executor, tuner, emergency=False):
+    """
+    Full scan → score → filter → execute pipeline.
+    Called every cycle AND immediately on oracle/mempool signals.
+    Returns number of opportunities found.
+    """
+    from bot.gas_manager    import is_gas_spike
+
+    # Skip gas spikes unless it's an emergency scan
+    if not emergency and is_gas_spike():
+        logger.warning("Gas spike detected -- skipping non-emergency scan")
+        return 0
+
+    # Scan all enabled protocols
+    positions = monitor.scan_all_protocols()
+    if not positions:
+        logger.info("No positions near liquidation threshold")
+        return 0
+
+    # Velocity: bubble fast-falling positions to the top
+    # Note: monitor.velocity is updated inside scan_all_protocols
+    fast = monitor.velocity.get_fast_falling(positions, velocity_threshold=-0.03)
+    if fast:
+        logger.info(f"[!] {len(fast)} fast-falling position(s) detected -- priority execution")
+        # Ensure fast positions are at the start of the list
+        positions = fast + [p for p in positions if p not in fast]
+
+    return _process_and_execute(positions, executor, tuner)
+
 
 # ── Pages ─────────────────────────────────────────────────────────────────────
 @app.route("/")
@@ -291,25 +348,53 @@ def api_stats():
 @app.route("/api/profit-history")
 def api_profit_history():
     try:
-        con  = sqlite3.connect(str(ROOT / "logs" / "bot.db"))
-        rows = con.execute(
-            """SELECT date(timestamp,'unixepoch') as day,
-                      COUNT(*) as count,
-                      COALESCE(SUM(estimated_profit),0) as profit
-               FROM liquidations
-               GROUP BY day ORDER BY day DESC LIMIT 30"""
-        ).fetchall()
-        con.close()
-        return jsonify([
-            {"day": r[0], "count": r[1], "profit": round(float(r[2]), 2)}
-            for r in rows
-        ])
+        from bot.persistence import history
+        data = history.get_all()
+
+        # Group by day
+        by_day = {}
+        for r in data:
+            day = time.strftime('%Y-%m-%d', time.gmtime(r.get('timestamp', 0)))
+            if day not in by_day:
+                by_day[day] = {"day": day, "count": 0, "profit": 0.0}
+            by_day[day]["count"] += 1
+            by_day[day]["profit"] += float(r.get("estimated_profit", 0))
+
+        sorted_days = sorted(by_day.values(), key=lambda x: x['day'], reverse=True)
+        return jsonify(sorted_days[:30])
     except Exception:
         return jsonify([])
 
+def get_merged_positions():
+    """
+    Unified source of truth: Aggregates strictly from categorized JSON stores.
+    Syncs 100% backend/frontend alignment for Critical, Danger, and Watching.
+    """
+    try:
+        from bot.persistence import critical_store, zombies_store, watching_store
+
+        all_pos = []
+        all_pos.extend(critical_store.get_all_list())
+        all_pos.extend(zombies_store.get_all_list())
+        all_pos.extend(watching_store.get_all_list())
+
+        # Ensure UI flags are consistent with HF thresholds
+        for p in all_pos:
+            hf = float(p.get("health_factor", 0))
+            # "Danger" zone in UI matches zombies.json (1.0 - 1.05)
+            p["is_zombie"] = (1.0 <= hf < 1.05)
+            # Standardize address field for UI
+            if "user" in p and "address" not in p:
+                p["address"] = p["user"]
+
+        return sorted(all_pos, key=lambda x: x.get("health_factor", 9.9))
+    except Exception as e:
+        logger.error(f"Error aggregating categorized positions: {e}")
+        return []
+
 @app.route("/api/positions")
 def api_positions():
-    return jsonify(get_approaching_positions())
+    return jsonify(get_merged_positions())
 
 @app.route("/api/logs")
 def api_logs():
@@ -420,7 +505,7 @@ def api_wallet_balances():
 
         eth_wei       = w3.eth.get_balance(account.address)
         eth_bal       = float(w3.from_wei(eth_wei, "ether"))
-        eth_price     = get_token_price_usd("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1") or 3000.0
+        eth_price     = get_token_price_usd(cfg("network", "weth"))
 
         result = {
             "wallet":    account.address,
@@ -600,7 +685,7 @@ def api_health_check():
             add(f"Protocol: {name}", "fail", str(e)[:60])
 
     try:
-        vault = cfg_data.get("flash_loan", {}).get("balancer_vault", "0xBA12222222228d8Ba445958a75a0704d566BF2C8")
+        vault = cfg_data.get("flash_loan", {}).get("balancer_vault")
         code  = w3.eth.get_code(w3.to_checksum_address(vault))
         add("Balancer Vault (0% fee)", "ok" if len(code) > 2 else "fail",
             vault[:10] + "... reachable" if len(code) > 2 else "Not found")
@@ -623,7 +708,8 @@ def api_health_check():
         add("Oracle Feeds", "warn", "Chainlink watching disabled")
 
     try:
-        code = w3.eth.get_code(w3.to_checksum_address("0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6"))
+        quoter = cfg_data.get("network", {}).get("uniswap_v3_quoter")
+        code = w3.eth.get_code(w3.to_checksum_address(quoter))
         add("Uniswap V3 Quoter", "ok" if len(code) > 2 else "fail",
             "Reachable" if len(code) > 2 else "Not found")
     except Exception as e:
@@ -640,43 +726,46 @@ def api_health_check():
 def api_analytics():
     """Full analytics breakdown by protocol, collateral, and time period."""
     try:
+        from bot.persistence import history
         days = int(request.args.get("days", 30))
         since = int(time.time()) - (days * 86400)
-        con   = sqlite3.connect(str(ROOT / "logs" / "bot.db"))
-        con.row_factory = sqlite3.Row
+        data = history.get_all()
 
-        # All-time stats
-        all_total  = con.execute("SELECT COUNT(*), COALESCE(SUM(estimated_profit),0) FROM liquidations").fetchone()
-        # Period stats
-        period     = con.execute(
-            "SELECT COUNT(*), COALESCE(SUM(estimated_profit),0) FROM liquidations WHERE timestamp > ?",
-            (since,)
-        ).fetchone()
-        # By protocol
-        by_proto   = con.execute(
-            """SELECT protocol, COUNT(*) as count, COALESCE(SUM(estimated_profit),0) as profit
-               FROM liquidations WHERE timestamp > ? GROUP BY protocol""", (since,)
-        ).fetchall()
-        # By collateral
-        by_col     = con.execute(
-            """SELECT collateral_token, COUNT(*) as count, COALESCE(SUM(estimated_profit),0) as profit
-               FROM liquidations WHERE timestamp > ? GROUP BY collateral_token ORDER BY profit DESC""",
-            (since,)
-        ).fetchall()
-        # Daily
-        daily      = con.execute(
-            """SELECT date(timestamp,'unixepoch') as day, COUNT(*), COALESCE(SUM(estimated_profit),0)
-               FROM liquidations WHERE timestamp > ? GROUP BY day ORDER BY day""", (since,)
-        ).fetchall()
-        con.close()
+        # Filtered and derived stats
+        all_count = len(data)
+        all_profit = sum(float(r.get("estimated_profit", 0)) for r in data)
+
+        period_data = [r for r in data if r.get("timestamp", 0) > since]
+        period_count = len(period_data)
+        period_profit = sum(float(r.get("estimated_profit", 0)) for r in period_data)
+
+        by_proto = {}
+        by_col = {}
+        daily = {}
+
+        for r in period_data:
+            p = r.get("protocol", "Unknown")
+            by_proto[p] = by_proto.get(p, {"count": 0, "profit": 0.0})
+            by_proto[p]["count"] += 1
+            by_proto[p]["profit"] += float(r.get("estimated_profit", 0))
+
+            c = r.get("collateral_token", "Unknown")
+            by_col[c] = by_col.get(c, {"count": 0, "profit": 0.0})
+            by_col[c]["count"] += 1
+            by_col[c]["profit"] += float(r.get("estimated_profit", 0))
+
+            day = time.strftime('%Y-%m-%d', time.gmtime(r.get('timestamp', 0)))
+            daily[day] = daily.get(day, {"count": 0, "profit": 0.0})
+            daily[day]["count"] += 1
+            daily[day]["profit"] += float(r.get("estimated_profit", 0))
 
         return jsonify({
             "days":        days,
-            "all_time":    {"count": all_total[0], "profit": round(float(all_total[1]),2)},
-            "period":      {"count": period[0],    "profit": round(float(period[1]),2)},
-            "by_protocol": [{"protocol": r[0], "count": r[1], "profit": round(float(r[2]),2)} for r in by_proto],
-            "by_collateral":[{"token": r[0], "count": r[1], "profit": round(float(r[2]),2)} for r in by_col],
-            "daily":       [{"day": r[0], "count": r[1], "profit": round(float(r[2]),2)} for r in daily],
+            "all_time":    {"count": all_count, "profit": round(all_profit, 2)},
+            "period":      {"count": period_count, "profit": round(period_profit, 2)},
+            "by_protocol": [{"protocol": k, "count": v["count"], "profit": round(v["profit"], 2)} for k, v in by_proto.items()],
+            "by_collateral":[{"token": k, "count": v["count"], "profit": round(v["profit"], 2)} for k, v in by_col.items()],
+            "daily":       [{"day": k, "count": v["count"], "profit": round(v["profit"], 2)} for k, v in sorted(daily.items())],
         })
     except Exception as e:
         return jsonify({"error": str(e)})
@@ -695,10 +784,12 @@ def _push_loop():
                     "cycle":     _bot_stats["cycle"],
                     "last_scan": _bot_stats["last_scan"],
                 })
-                socketio.emit("positions",  get_approaching_positions()[:20])
+                # Send more positions to ensure frontend has enough to display/filter
+                socketio.emit("positions",  get_merged_positions()[:100])
             except Exception:
                 pass
-        time.sleep(3)
+        # Increase frequency during initial scan
+        time.sleep(1)
 
 
 def _log_tail():
@@ -767,7 +858,7 @@ def main():
     print(f"  Bot:        {bot_status}")
     print(f"{'═'*56}\n")
 
-    socketio.run(app, host=args.host, port=args.port, debug=False, log_output=False)
+    socketio.run(app, host=args.host, port=args.port, debug=False, log_output=False, allow_unsafe_werkzeug=True)
 
 
 if __name__ == "__main__":

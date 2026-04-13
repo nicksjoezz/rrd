@@ -53,6 +53,7 @@
   <span class="filter-chip" data-filter="crit" onclick="setFilter(this,'crit')">CRITICAL (&lt;1.0)</span>
   <span class="filter-chip" data-filter="warn" onclick="setFilter(this,'warn')">DANGER (1.0–1.05)</span>
   <span class="filter-chip" data-filter="watch" onclick="setFilter(this,'watch')">WATCHING (1.05–1.15)</span>
+  <span class="filter-chip" data-filter="zombie" onclick="setFilter(this,'zombie')">ZOMBIES</span>
 
   <div class="scan-ping">
     <div class="scanner-line" style="width:80px"></div>
@@ -86,7 +87,8 @@
     <span id="pos-count" style="font-size:10px;color:var(--text-dim)">0 positions</span>
   </div>
   <div class="card-body" style="padding:0">
-    <table class="data-table" id="positions-table">
+    <div class="table-responsive">
+      <table class="data-table" id="positions-table">
       <thead>
         <tr>
           <th>ADDRESS</th>
@@ -105,6 +107,7 @@
         </td></tr>
       </tbody>
     </table>
+    </div>
   </div>
 </div>
 {% endblock %}
@@ -135,9 +138,11 @@ function onPositions(positions) {
 
 function renderPositions() {
   const filtered = allPositions.filter(p => {
-    if (activeFilter === 'crit')  return p.health_factor < 1.0;
-    if (activeFilter === 'warn')  return p.health_factor >= 1.0 && p.health_factor < 1.05;
-    if (activeFilter === 'watch') return p.health_factor >= 1.05;
+    const hf = parseFloat(p.health_factor) || 9.9;
+    if (activeFilter === 'crit')   return hf < 1.0;
+    if (activeFilter === 'warn')   return hf >= 1.0 && hf < 1.05;
+    if (activeFilter === 'watch')  return hf >= 1.05;
+    if (activeFilter === 'zombie') return p.is_zombie === true;
     return true;
   });
 
@@ -160,7 +165,8 @@ function renderPositions() {
       : '—';
 
     let statusBadge;
-    if (hf < 1.0)         statusBadge = '<span class="badge badge-red">LIQUIDATABLE</span>';
+    if (p.is_zombie)      statusBadge = '<span class="badge badge-sim">ZOMBIE</span>';
+    else if (hf < 1.0)    statusBadge = '<span class="badge badge-red">LIQUIDATABLE</span>';
     else if (hf < 1.05)   statusBadge = '<span class="badge badge-amber">DANGER</span>';
     else                  statusBadge = '<span class="badge badge-green">WATCHING</span>';
 

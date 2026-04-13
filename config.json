@@ -4,7 +4,10 @@
     "rpc_ws": "wss://arb1.arbitrum.io/ws",
     "alchemy_key": "9fVR5rZUC-g2L5zbeywTA",
     "chain_id": 42161,
-    "chain_name": "Arbitrum One"
+    "chain_name": "Arbitrum One",
+    "weth": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+    "multicall3": "0xcA11bde05977b3631167028862bE2a173976CA11",
+    "uniswap_v3_quoter": "0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6"
   },
   "wallet": {
     "private_key": "YOUR_PRIVATE_KEY_HERE",
@@ -155,9 +158,10 @@
       "ETH_USD": "0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612",
       "BTC_USD": "0x6ce185860a4963106506C203335A2910413708e9",
       "ARB_USD": "0xb2A824043730FE05F3DA2efaFa1CBbe83fa548D7",
-      "LINK_USD": "0x86E53CF1B873786aC9Cc2ce1D567A64D7609ee5",
+      "LINK_USD": "0x86e53CF1B873786AC9cC2cE1d567A64D7609eE58",
       "GMX_USD": "0xDB98056FecFff59D032aB628337A4887110df3dB"
     },
+    "fallback_eth_price": 3000.0,
     "price_drop_trigger_pct": 2.0
   },
   "notifications": {

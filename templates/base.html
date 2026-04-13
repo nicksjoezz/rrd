@@ -50,7 +50,7 @@ body::after {
   content: ''; position: fixed; inset: 0; z-index: 1; pointer-events: none; opacity: 0.025;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
-#app { position: relative; z-index: 2; display: flex; min-height: 100vh; }
+#app { position: relative; z-index: 2; display: flex; min-height: 100vh; flex-direction: row; }
 
 /* ── Sidebar ── */
 #sidebar {
@@ -58,7 +58,8 @@ body::after {
   background: linear-gradient(180deg, var(--bg1) 0%, var(--bg) 100%);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column;
-  position: fixed; top: 0; left: 0; bottom: 0; z-index: 10; padding: 0 0 24px;
+  position: fixed; top: 0; left: 0; bottom: 0; z-index: 100; padding: 0 0 24px;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .sidebar-logo { padding: 24px 20px 20px; border-bottom: 1px solid var(--border); }
 .logo-mark {
@@ -139,18 +140,25 @@ body::after {
 }
 
 /* ── Main ── */
-#main { margin-left: 220px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+#main { margin-left: 220px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; width: calc(100% - 220px); }
 
 /* ── Topbar ── */
 #topbar {
   height: 52px; display: flex; align-items: center; justify-content: space-between;
   padding: 0 28px; border-bottom: 1px solid var(--border);
   background: rgba(2,11,5,0.85); backdrop-filter: blur(8px);
-  position: sticky; top: 0; z-index: 9;
+  position: sticky; top: 0; z-index: 90;
 }
 .topbar-title { font-family: var(--font-hud); font-size: 11px; letter-spacing: 0.2em; color: var(--text-dim); text-transform: uppercase; }
 .topbar-title span { color: var(--green); }
 .topbar-right { display: flex; align-items: center; gap: 20px; }
+
+.mobile-toggle {
+  display: none;
+  background: none; border: none; color: var(--green);
+  font-size: 20px; cursor: pointer; padding: 5px;
+  margin-right: 15px;
+}
 
 /* Mode indicator in topbar */
 .topbar-mode {
@@ -168,7 +176,7 @@ body::after {
 .metric-chip .lbl { font-size: 9px; color: var(--text-lo); letter-spacing: 0.12em; }
 
 /* ── Page ── */
-.page { padding: 28px; flex: 1; }
+.page { padding: 28px; flex: 1; width: 100%; overflow-x: hidden; }
 
 /* ── Cards ── */
 .card { background: var(--bg1); border: 1px solid var(--border); border-radius: 2px; position: relative; overflow: hidden; }
@@ -180,6 +188,7 @@ body::after {
 
 /* ── Stat blocks ── */
 .stat-grid { display: grid; gap: 16px; }
+.table-responsive { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .stat-block { background: var(--bg2); border: 1px solid var(--border); padding: 18px 20px; position: relative; overflow: hidden; }
 .stat-block::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, var(--green-lo), var(--green-mid), var(--green-lo)); transform: scaleX(0); transform-origin: left; transition: transform 0.6s ease; }
 .stat-block:hover::after { transform: scaleX(1); }
@@ -260,6 +269,28 @@ input:checked + .toggle-slider::before { transform: translateX(18px); background
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
 .grid-4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 16px; }
+
+@media (max-width: 1100px) {
+  .grid-4 { grid-template-columns: 1fr 1fr; }
+  .topbar-metrics { display: none; }
+}
+
+@media (max-width: 850px) {
+  #sidebar { transform: translateX(-100%); }
+  #sidebar.open { transform: translateX(0); }
+  #main { margin-left: 0; width: 100%; }
+  .mobile-toggle { display: block; }
+  .grid-2 { grid-template-columns: 1fr; }
+  .topbar-title { font-size: 9px; }
+  .page { padding: 16px; }
+}
+
+@media (max-width: 500px) {
+  .grid-4 { grid-template-columns: 1fr; }
+  .topbar-right .topbar-mode { display: none; }
+  .data-table th, .data-table td { padding: 8px 10px; font-size: 10px; }
+  .stat-value { font-size: 24px; }
+}
 .mt-4{margin-top:4px} .mt-8{margin-top:8px} .mt-16{margin-top:16px} .mt-24{margin-top:24px}
 .mb-16{margin-bottom:16px} .flex{display:flex} .items-center{align-items:center}
 .justify-between{justify-content:space-between} .flex-1{flex:1} .gap-8{gap:8px}
@@ -306,6 +337,9 @@ input:checked + .toggle-slider::before { transform: translateX(18px); background
       <a href="/analytics" class="nav-link {% if request.endpoint=='page_analytics' %}active{% endif %}">
         <span class="nav-icon">◭</span> Analytics
       </a>
+      <a href="/wallet" class="nav-link {% if request.endpoint=='page_wallet' %}active{% endif %}">
+        <span class="nav-icon">👛</span> Wallet
+      </a>
       <div class="nav-section">Config</div>
       <a href="/settings" class="nav-link {% if request.endpoint=='page_settings' %}active{% endif %}">
         <span class="nav-icon">⚙</span> Settings
@@ -325,6 +359,7 @@ input:checked + .toggle-slider::before { transform: translateX(18px); background
   <!-- Main -->
   <div id="main">
     <header id="topbar">
+      <button class="mobile-toggle" onclick="toggleSidebar()">☰</button>
       <div class="topbar-title">{% block page_title %}<span>DASHBOARD</span>{% endblock %}</div>
       <div class="topbar-right">
         <!-- Mode pill in topbar -->
@@ -454,6 +489,22 @@ async function toggleBot(){
   const d = await r.json();
   if(!d.ok) alert(d.msg);
 }
+
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+}
+
+// Close sidebar when clicking outside on mobile
+document.addEventListener('click', (e) => {
+  const sidebar = document.getElementById('sidebar');
+  const toggle = document.querySelector('.mobile-toggle');
+  if (window.innerWidth <= 850 &&
+      !sidebar.contains(e.target) &&
+      !toggle.contains(e.target) &&
+      sidebar.classList.contains('open')) {
+    sidebar.classList.remove('open');
+  }
+});
 
 /* Load current mode on page load */
 (async()=>{

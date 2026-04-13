@@ -13,6 +13,14 @@
   color: var(--text-lo); letter-spacing: 0.15em;
 }
 .kpi-row { display: grid; grid-template-columns: repeat(5,1fr); gap: 12px; margin-bottom: 20px; }
+
+@media (max-width: 1000px) {
+  .kpi-row { grid-template-columns: 1fr 1fr 1fr; }
+}
+
+@media (max-width: 600px) {
+  .kpi-row { grid-template-columns: 1fr 1fr; }
+}
 .kpi-box {
   background: var(--bg2); border: 1px solid var(--border);
   padding: 14px 16px; text-align: center;
@@ -79,7 +87,8 @@
     <div class="card-title"><span class="dot"></span> Liquidation History</div>
   </div>
   <div class="card-body" style="padding:0">
-    <table class="data-table" id="history-tbl">
+    <div class="table-responsive">
+      <table class="data-table" id="history-tbl">
       <thead>
         <tr>
           <th>DATE / TIME</th><th>BORROWER</th><th>PROTOCOL</th>
@@ -90,6 +99,7 @@
         <tr><td colspan="6" class="dim" style="text-align:center;padding:24px">No history</td></tr>
       </tbody>
     </table>
+    </div>
   </div>
 </div>
 {% endblock %}
