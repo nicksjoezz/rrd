@@ -176,12 +176,12 @@ class LiquidationExecutor:
     def _simulate_tx(self, tx: dict, position: dict, profit_info: dict) -> Optional[str]:
         """
         Simulate mode: validate via eth_call, record result, do NOT send.
-        Now includes 'Rival Check' to see if someone else beat us.
+        High-speed: No rival check unless it fails.
         """
         protocol = position.get("protocol", "unknown")
         user     = position["user"]
         
-        # Latency check: how long since we first spotted this zombie?
+        # Latency check
         spotted_at = position.get("queued_at", time.time())
         latency    = time.time() - spotted_at
 
@@ -199,23 +199,11 @@ class LiquidationExecutor:
                 "data": tx["data"],
             })
 
-            # 2. Rival check (did someone else already do it?)
-            rival = self._check_rival_liquidation(user)
-            
             sim_id = f"sim-{int(time.time())}-{user[:6]}"
-            
-            if rival:
-                gas_msg = f" | Rival Gas: {rival['gas_price_gwei']} gwei" if "gas_price_gwei" in rival else ""
-                logger.warning(
-                    f"[{protocol}] SIMULATE [LOST] Rival bot beat us! | "
-                    f"Rival TX: {rival['tx_hash'][:14]}... | Block: {rival['block']}{gas_msg} | "
-                    f"Discovery Latency: {latency:.2f}s"
-                )
-            else:
-                logger.info(
-                    f"[{protocol}] SIMULATE [WIN] eth_call passed | gas~{gas_est:,} | "
-                    f"Discovery Latency: {latency:.2f}s | id: {sim_id}"
-                )
+            logger.info(
+                f"[{protocol}] SIMULATE [WIN] eth_call passed | gas~{gas_est:,} | "
+                f"Discovery Latency: {latency:.2f}s | id: {sim_id}"
+            )
 
             record_liquidation(
                 tx_hash=sim_id,
@@ -231,18 +219,22 @@ class LiquidationExecutor:
             return sim_id
 
         except Exception as e:
-            err = str(e)
-            reason = (
-                "Position recovered (HF > 1)"  if "health"        in err.lower() else
-                "Swap slippage too high"        if "insufficient"  in err.lower() else
-                "Out of gas"                    if "gas"           in err.lower() else
-                err[:100]
-            )
-            # Even if it failed now, maybe someone just beat us?
+            # ONLY check rival on failure to avoid pre-flight delays
             rival = self._check_rival_liquidation(user)
             if rival:
-                logger.info(f"[{protocol}] SIMULATED [LOST] Rival bot liquidated target at block {rival['block']}")
+                gas_msg = f" | Rival Gas: {rival['gas_price_gwei']} gwei" if "gas_price_gwei" in rival else ""
+                logger.info(f"[{protocol}] SIMULATED [LOST] Rival bot beat us at block {rival['block']}{gas_msg}")
+                from .auto_tuner import get_tuner
+                if "gas_price_gwei" in rival:
+                    get_tuner().record_rival_gas(rival["gas_price_gwei"])
             else:
+                err = str(e)
+                reason = (
+                    "Position recovered (HF > 1)"  if "health"        in err.lower() else
+                    "Swap slippage too high"        if "insufficient"  in err.lower() else
+                    "Out of gas"                    if "gas"           in err.lower() else
+                    err[:100]
+                )
                 logger.info(f"[{protocol}] SIMULATED [FAIL] | {reason} | Latency: {latency:.2f}s")
             return None
 
@@ -252,7 +244,9 @@ class LiquidationExecutor:
         user     = position["user"]
         try:
             signed  = self._account.sign_transaction(tx)
-            tx_hash = self._w3.eth.send_raw_transaction(signed.raw_transaction)
+            # Use raw_transaction or rawTransaction based on web3 version
+            raw_tx  = getattr(signed, 'raw_transaction', getattr(signed, 'rawTransaction', None))
+            tx_hash = self._w3.eth.send_raw_transaction(raw_tx)
             tx_hex  = tx_hash.hex()
             logger.info(f"[{protocol}] TX sent: {tx_hex}")
 
@@ -285,10 +279,25 @@ class LiquidationExecutor:
                 return tx_hex
             else:
                 logger.error(f"[{protocol}] [FAIL] REVERTED | TX: {tx_hex}")
+                # Check rival on revert
+                rival = self._check_rival_liquidation(user)
+                if rival:
+                    logger.warning(f"[{protocol}] REVERT Reason: Rival beat us! Gas: {rival.get('gas_price_gwei')} gwei")
+                    if "gas_price_gwei" in rival:
+                        from .auto_tuner import get_tuner
+                        get_tuner().record_rival_gas(rival["gas_price_gwei"])
                 return None
 
         except Exception as e:
             logger.error(f"[{protocol}] TX error: {e}")
+            # Check rival on exception (e.g. nonce issue or pool state change)
+            rival = self._check_rival_liquidation(user)
+            if rival:
+                logger.warning(f"[{protocol}] TX Error Reason: Rival bot beat us! Rival Gas: {rival.get('gas_price_gwei')} gwei")
+                if "gas_price_gwei" in rival:
+                    from .auto_tuner import get_tuner
+                    get_tuner().record_rival_gas(rival["gas_price_gwei"])
+
             if cfg("notifications", "notify_on_error"):
                 notify(f"[WARN] Bot error [{protocol}]: {str(e)[:200]}")
             return None
@@ -303,31 +312,39 @@ class LiquidationExecutor:
         user     = position["user"]
 
         # ── Final On-Chain Verification ──────────────────────────────────────
-        # Confirm position is still open and liquidatable immediately before fire
-        try:
-            pool_addr = position.get("pool_address")
-            if pool_addr:
-                from .utils import AAVE_POOL_ABI, health_factor_float
-                pool = self._w3.eth.contract(address=checksum(pool_addr), abi=AAVE_POOL_ABI)
-                data = pool.functions.getUserAccountData(checksum(user)).call()
+        # High-Speed Optimization: Skip pre-flight check in LIVE mode to avoid RPC latency
+        if mode == "simulate":
+            try:
+                pool_addr = position.get("pool_address")
+                if pool_addr:
+                    from .utils import AAVE_POOL_ABI, health_factor_float
+                    pool = self._w3.eth.contract(address=checksum(pool_addr), abi=AAVE_POOL_ABI)
+                    data = pool.functions.getUserAccountData(checksum(user)).call()
 
-                fresh_hf = health_factor_float(data[5])
-                total_debt = data[1]
+                    fresh_hf = health_factor_float(data[5])
+                    total_debt = data[1]
 
-                if total_debt == 0:
-                    logger.info(f"[{protocol}] Skipping {user[:8]}... Position already repaid/closed")
-                    return None
+                    if total_debt == 0:
+                        logger.info(f"[{protocol}] Skipping {user[:8]}... Position already repaid/closed")
+                        return None
 
-                if fresh_hf > 1.0 and mode == "live":
-                    # In simulate mode we still might want to see it,
-                    # but in live we MUST skip if HF > 1.0
-                    logger.info(f"[{protocol}] Skipping {user[:8]}... Position recovered (HF={fresh_hf:.4f})")
-                    return None
+                    # Fire on EITHER: protocol-reported HF < 1.0 OR our local refined HF < 1.0
+                    local_hf = position.get("health_factor", 9.9)
 
-                # Update position object with latest on-chain data
-                position["health_factor"] = fresh_hf
-        except Exception as e:
-            logger.warning(f"[{protocol}] Pre-execution verification failed for {user[:8]}: {e}")
+                    if fresh_hf > 1.0 and local_hf > 1.0:
+                        logger.info(f"[{protocol}] Skipping {user[:8]}... Position recovered (Protocol HF={fresh_hf:.4f}, Local HF={local_hf:.4f})")
+                        return None
+
+                    if fresh_hf > 1.0 and local_hf <= 1.0:
+                        logger.info(f"[{protocol}] Discrepancy detected! Protocol HF={fresh_hf:.4f} but Local HF={local_hf:.4f}")
+
+                    # Update position object for logs
+                    position["protocol_hf"] = fresh_hf
+                    position["health_factor"] = min(fresh_hf, local_hf)
+            except Exception as e:
+                logger.warning(f"[{protocol}] Simulation verification failed for {user[:8]}: {e}")
+        else:
+            logger.info(f"[{protocol}] [LIVE] Bypassing pre-flight verification for maximum speed")
 
         # Profitability check (runs in both modes)
         profit_info = estimate_profit_usd(position)
@@ -373,7 +390,12 @@ class LiquidationExecutor:
                     return sim_id
 
                 # If we HAVE a contract, do the full eth_call simulation
-                gas_params = get_gas_params(profit_info["estimated_profit_usd"])
+                from .auto_tuner import get_tuner
+                rival_gas = None
+                if get_tuner().rival_gas_prices:
+                    rival_gas = sum(get_tuner().rival_gas_prices) / len(get_tuner().rival_gas_prices)
+
+                gas_params = get_gas_params(profit_info["estimated_profit_usd"], rival_gas_price_gwei=rival_gas)
                 tx         = self._build_tx(position, gas_params)
                 return self._simulate_tx(tx, position, profit_info)
 
@@ -382,7 +404,12 @@ class LiquidationExecutor:
                     logger.warning(f"[{protocol}] Skipping LIVE -- missing private_key or liquidator_contract")
                     return None
 
-                gas_params = get_gas_params(profit_info["estimated_profit_usd"])
+                from .auto_tuner import get_tuner
+                rival_gas = None
+                if get_tuner().rival_gas_prices:
+                    rival_gas = sum(get_tuner().rival_gas_prices) / len(get_tuner().rival_gas_prices)
+
+                gas_params = get_gas_params(profit_info["estimated_profit_usd"], rival_gas_price_gwei=rival_gas)
                 tx         = self._build_tx(position, gas_params)
                 return self._live_tx(tx, position, profit_info)
 
@@ -397,7 +424,7 @@ class LiquidationExecutor:
             tx = self.execute(pos)
             if tx:
                 results.append(tx)
-            time.sleep(1)
+            # No delay between executions for maximum speed
         return results
 
     def withdraw_profits(self, token_address: str) -> Optional[str]:

@@ -138,14 +138,16 @@ function onStats(d) {
       const ts = t.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
       const profit = parseFloat(r.estimated_profit) || 0;
       const pColor = profit > 0 ? 'green' : 'red';
+      const isSim = r.tx_hash && r.tx_hash.startsWith('sim-');
       const tx = r.tx_hash ? r.tx_hash.slice(0,10)+'…' : '—';
-      return `<tr>
+      const simBadge = isSim ? '<span class="sim-tag">[SIM]</span> ' : '';
+      return `<tr class="${isSim ? 'sim-row' : ''}">
         <td class="dim">${ts}</td>
         <td class="mono cyan">${fmtAddr(r.borrower)}</td>
         <td><span class="badge badge-cyan">${r.protocol||'—'}</span></td>
         <td class="amber">${(r.collateral_token||'').slice(0,8)}</td>
         <td>${fmtUSD(r.debt_covered_usd)}</td>
-        <td class="${pColor}">${fmtUSD(profit)}</td>
+        <td class="${pColor}">${simBadge}${fmtUSD(profit)}</td>
         <td class="dim" style="font-size:9px">${tx}</td>
       </tr>`;
     }).join('');

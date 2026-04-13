@@ -54,15 +54,16 @@ def get_current_base_fee() -> int:
         return _last_base_fee or w3.to_wei(0.1, "gwei")
 
 
-def get_gas_params(estimated_profit_usd: float = 0.0) -> dict:
+def get_gas_params(estimated_profit_usd: float = 0.0, rival_gas_price_gwei: Optional[float] = None) -> dict:
     """
     Compute optimal gas params for a liquidation tx.
 
     Strategy:
       - Base: current_base_fee * 1.15 (buffer for next block)
       - Priority: 0.01 gwei flat (Arbitrum sequencer doesn't need bribing)
-      - Scale: if profit > $500, willing to pay up to 2× normal gas cap
-      - Hard cap: config max_fee_per_gas_gwei
+      - Scale: if profit > $500, willing to pay up to 3× normal gas cap
+      - Competition: if rival_gas_price is known, bid slightly higher
+      - Hard cap: config max_fee_per_gas_gwei scaled by profit/market
 
     Returns web3-compatible dict for build_transaction().
     """
@@ -80,11 +81,16 @@ def get_gas_params(estimated_profit_usd: float = 0.0) -> dict:
 
     # Scale cap by profit — willing to pay more for bigger opportunities
     if estimated_profit_usd >= 500:
-        cap = max_gwei * 3.0  # Very aggressive for big wins
+        cap = max_gwei * 5.0  # Extremely aggressive for whale wins
     elif estimated_profit_usd >= 100:
-        cap = max_gwei * 2.0  # Highly competitive for solid wins
+        cap = max_gwei * 2.5  # Highly competitive for solid wins
     else:
         cap = max_gwei
+
+    # Competition bidding
+    if rival_gas_price_gwei and rival_gas_price_gwei > recommended:
+        # Match competitor + 10% buffer, up to our cap
+        recommended = min(rival_gas_price_gwei * 1.1, cap)
 
     max_fee_gwei = min(recommended, cap)
 
@@ -100,6 +106,7 @@ def get_gas_params(estimated_profit_usd: float = 0.0) -> dict:
         f"maxFee={max_fee_gwei:.4f} gwei | "
         f"priority={prio_gwei} gwei | "
         f"cap={cap:.2f} gwei"
+        + (f" | rival={rival_gas_price_gwei}" if rival_gas_price_gwei else "")
     )
 
     return {

@@ -13,7 +13,8 @@ Edge modules:
   risk_scorer      7-factor composite opportunity score
   oracle_watcher   Chainlink price-drop triggered scans
   mempool_watcher  pending oracle tx detection
-  ws_streamer      real-time event streaming (WebSocket/HTTP)
+  ws_prices        real-time price streaming (WebSocket)
+  realtime_hf      real-time health factor tracking
   emode_detector   Aave V3 E-Mode position awareness
 
 Infrastructure:
@@ -38,4 +39,5 @@ from .mempool_watcher    import start_mempool_watcher_thread
 from .emode_detector     import EModeDetector, flag_emode_risk_positions
 from .risk_scorer        import score_position, rank_by_score
 from .auto_tuner         import get_tuner, AutoTuner
-from .ws_streamer        import WebSocketStreamer
+from .ws_prices          import get_price_streamer, RealTimePriceStreamer
+from .realtime_hf        import RealTimeHFTracker

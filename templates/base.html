@@ -349,7 +349,7 @@ input:checked + .toggle-slider::before { transform: translateX(18px); background
     <div class="sidebar-footer">
       <div>NETWORK</div>
       <div class="chain-badge">⬡ ARBITRUM ONE</div>
-      <div style="margin-top:10px">MODE</div>
+      <div style="margin-top:10px">SESSION MODE</div>
       <div id="sidebar-mode-badge" class="chain-badge" style="margin-top:4px;cursor:pointer" onclick="window.location='/settings'">
         ⬡ SIMULATE
       </div>
@@ -440,14 +440,26 @@ function applyMode(mode){
 
   /* sidebar badge */
   const badge = document.getElementById('mode-badge');
-  badge.className = 'mode-badge ' + (isSim ? 'sim' : 'live');
-  document.getElementById('mode-icon').textContent  = isSim ? '◈' : '⚡';
-  document.getElementById('mode-label').textContent = isSim ? 'SIMULATE' : 'LIVE';
+  if(badge) {
+    badge.className = 'mode-badge ' + (isSim ? 'sim' : 'live');
+    document.getElementById('mode-icon').textContent  = isSim ? '◈' : '⚡';
+    document.getElementById('mode-label').textContent = isSim ? 'SIMULATE' : 'LIVE';
+  }
+
+  /* sidebar footer badge */
+  const sfb = document.getElementById('sidebar-mode-badge');
+  if(sfb) {
+    sfb.textContent = (isSim ? '⬡ SIMULATE' : '⚡ LIVE');
+    sfb.style.borderColor = isSim ? '' : 'var(--green)';
+    sfb.style.color = isSim ? '' : 'var(--green)';
+  }
 
   /* topbar pill */
   const tp = document.getElementById('topbar-mode');
-  tp.className = 'topbar-mode ' + (isSim ? 'sim' : 'live');
-  document.getElementById('topbar-mode-text').textContent = isSim ? 'SIMULATE' : 'LIVE';
+  if(tp) {
+    tp.className = 'topbar-mode ' + (isSim ? 'sim' : 'live');
+    document.getElementById('topbar-mode-text').textContent = isSim ? 'SIMULATE' : 'LIVE';
+  }
 }
 
 async function toggleMode(){

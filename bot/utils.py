@@ -145,6 +145,25 @@ AAVE_POOL_ABI = json.loads('''[
      {"name":"ltv","type":"uint256"},
      {"name":"healthFactor","type":"uint256"}
    ]},
+  {"name":"getReservesList","type":"function","stateMutability":"view",
+   "inputs":[],"outputs":[{"type":"address[]"}]},
+  {"name":"getUserEMode","type":"function","stateMutability":"view",
+   "inputs":[{"name":"user","type":"address"}],"outputs":[{"type":"uint256"}]},
+  {"name":"getEModeCategoryData","type":"function","stateMutability":"view",
+   "inputs":[{"name":"id","type":"uint8"}],"outputs":[
+     {"components":[
+       {"name":"ltv","type":"uint16"},
+       {"name":"liquidationThreshold","type":"uint16"},
+       {"name":"liquidationBonus","type":"uint16"},
+       {"name":"priceSource","type":"address"},
+       {"name":"label","type":"string"}
+     ],"type":"tuple"}
+   ]},
+  {"name":"getConfiguration","type":"function","stateMutability":"view",
+   "inputs":[{"name":"asset","type":"address"}],
+   "outputs":[
+     {"components":[{"name":"data","type":"uint256"}],"type":"tuple"}
+   ]},
   {"name":"Borrow","type":"event","inputs":[
      {"name":"reserve","type":"address","indexed":true},
      {"name":"user","type":"address","indexed":false},
@@ -186,6 +205,14 @@ DATA_PROVIDER_ABI = json.loads('''[
      {"name":"stableBorrowRateEnabled","type":"bool"},
      {"name":"isActive","type":"bool"},
      {"name":"isFrozen","type":"bool"}
+   ]},
+  {"name":"getPaused","type":"function","stateMutability":"view",
+   "inputs":[{"name":"asset","type":"address"}],
+   "outputs":[{"type":"bool"}]},
+  {"name":"getReserveConfiguration","type":"function","stateMutability":"view",
+   "inputs":[{"name":"asset","type":"address"}],
+   "outputs":[
+     {"components":[{"name":"data","type":"uint256"}],"type":"tuple"}
    ]}
 ]''')
 

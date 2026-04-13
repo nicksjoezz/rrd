@@ -54,6 +54,7 @@ class ProtocolMonitor:
         self._last_scan_block  = 0
 
         w3 = get_web3()
+        self._w3 = w3
         self.pool = w3.eth.contract(
             address=checksum(pool_addr),
             abi=AAVE_POOL_ABI
@@ -135,30 +136,101 @@ class ProtocolMonitor:
             logger.info(f"[{self.name}] +{added} new borrowers (total: {len(self._borrowers):,})")
 
     def _refresh_reserve_configs(self):
-        """Fetch and cache decimals and liquidation thresholds for all supported tokens."""
+        """Fetch and cache decimals and liquidation thresholds for ALL protocol reserves."""
         if not self.data_provider: return
-        tokens = cfg("tokens")
-        for sym, info in tokens.items():
-            addr = checksum(info["address"])
+
+        try:
+            reserves = self.pool.functions.getReservesList().call()
+            logger.info(f"[{self.name}] Detected {len(reserves)} protocol reserves")
+        except Exception as e:
+            logger.warning(f"[{self.name}] Failed to fetch reserves list: {e}")
+            reserves = [v['address'] for v in cfg("tokens").values()]
+
+        w3 = self._w3 if hasattr(self, '_w3') else get_web3()
+        from .utils import ERC20_ABI
+
+        for addr in reserves:
+            addr_l = addr.lower()
             try:
                 # Aave V3 ReserveConfigurationData: [0] decimals, [1] ltv, [2] threshold, [3] bonus...
-                res = self.data_provider.functions.getReserveConfigurationData(addr).call()
-                self.reserve_configs[addr.lower()] = {
+                res = self.data_provider.functions.getReserveConfigurationData(checksum(addr)).call()
+
+                # Fetch E-Mode category via bitmask in getConfiguration (Pool)
+                # Aave V3 ReserveConfiguration Bitmask: 168-175 is EMode Category
+                raw_res = self.pool.functions.getConfiguration(checksum(addr)).call()
+                emode_cat = (raw_res[0] >> 168) & 0xFF
+
+                sym = "???"
+                token_map = get_token_map()
+                if addr_l in token_map:
+                    sym = token_map[addr_l]["symbol"]
+                else:
+                    try:
+                        t = w3.eth.contract(address=checksum(addr), abi=ERC20_ABI)
+                        sym = t.functions.symbol().call()
+                    except: pass
+
+                self.reserve_configs[addr_l] = {
+                    "symbol": sym,
                     "decimals": res[0],
                     "ltv": res[1] / 10000,
                     "threshold": res[2] / 10000,
                     "bonus": (res[3] - 10000) / 10000 if res[3] > 10000 else 0,
+                    "emode_category": emode_cat
                 }
             except Exception as e:
-                logger.debug(f"[{self.name}] Reserve config fail for {sym}: {e}")
+                logger.debug(f"[{self.name}] Reserve config fail for {addr[:10]}: {e}")
 
-    def _get_best_tokens_and_fresh_hf(self, user: str):
+    def _get_best_tokens_and_fresh_hf(self, user: str, force_fresh: bool = False):
         """
         Calculates HF using fresh local prices and returns the best
         collateral/debt tokens for liquidation.
+        Uses Multicall to fetch all reserve data in one batch for high speed.
         """
         if not self.data_provider: return None
         from .profitability import get_token_price_usd
+
+        w3 = self._w3 if hasattr(self, '_w3') else get_web3()
+        mc = w3.eth.contract(address=MULTICALL3_ADDR, abi=MULTICALL3_ABI)
+
+        # ── E-Mode Awareness ──────────────────────────────────────────────────
+        user_emode = 0
+        emode_threshold = None
+        emode_bonus = None
+        try:
+            user_emode = self.pool.functions.getUserEMode(checksum(user)).call()
+            if user_emode > 0:
+                em_data = self.pool.functions.getEModeCategoryData(user_emode).call()
+                if isinstance(em_data, (list, tuple)) and len(em_data) > 0:
+                    if isinstance(em_data[0], (list, tuple)): em_data = em_data[0]
+                    emode_threshold = em_data[1] / 10000
+                    emode_bonus = (em_data[2] - 10000) / 10000
+        except Exception: pass
+
+        # Use ALL detected protocol reserves (enables liquidating any token)
+        token_list = list(self.reserve_configs.items()) # list of (addr_l, config)
+        if not token_list:
+            logger.info(f"[{self.name}] token_list is empty in _get_best_tokens_and_fresh_hf")
+            # Try to refresh if empty
+            self._refresh_reserve_configs()
+            token_list = list(self.reserve_configs.items())
+        calls = []
+        for addr_l, _ in token_list:
+            call_data = self.data_provider.encodeABI("getUserReserveData", [checksum(addr_l), checksum(user)])
+            calls.append({"target": self.data_provider.address, "callData": call_data})
+
+        try:
+            _, return_data = mc.functions.aggregate(calls).call()
+        except Exception as e:
+            logger.info(f"[{self.name}] Multicall for user reserve data failed: {e}")
+            # Fallback to individual calls if multicall fails (rare on Arbitrum)
+            return_data = []
+            for call in calls:
+                try:
+                    res = self._w3.eth.call({"to": call["target"], "data": call["callData"]})
+                    return_data.append(res)
+                except:
+                    return_data.append(b"")
 
         best_col_score = 0
         best_col = None
@@ -166,60 +238,82 @@ class ProtocolMonitor:
         best_debt = None
         total_fresh_weighted_col = 0
         total_fresh_debt = 0
+        missing_price = False
 
-        tokens = cfg("tokens")
-        for sym, info in tokens.items():
-            addr = info["address"]
-            addr_l = addr.lower()
+        for i, raw_res in enumerate(return_data):
+            addr, config = token_list[i]
+            sym = config.get("symbol", "???")
+
             try:
-                rd = self.data_provider.functions.getUserReserveData(
-                    checksum(addr), checksum(user)
-                ).call()
+                # [0] currentATokenBalance, [1] currentStableDebt, [2] currentVariableDebt...
+                rd = w3.codec.decode(["uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint40", "bool"], raw_res)
 
-                col_bal = rd[0] # currentATokenBalance
-                debt_bal = rd[2] # currentVariableDebt
+                col_bal = rd[0]
+                debt_bal = rd[1] + rd[2] # Total debt = stable + variable
                 if col_bal == 0 and debt_bal == 0: continue
 
-                price = get_token_price_usd(addr)
+                logger.info(f"[{self.name}] User {user[:8]} has {sym}: col={col_bal}, debt={debt_bal}")
 
-                config = self.reserve_configs.get(addr_l, {
-                    "decimals": info["decimals"], "threshold": 0.8, "bonus": info["liquidation_bonus"]
-                })
+                price = get_token_price_usd(addr, force_fresh=force_fresh)
+                if price == 0:
+                    logger.info(f"[{self.name}] Price missing for {sym} ({addr}) - skipping fresh HF")
+                    missing_price = True
+                    continue
+
                 decimals = config["decimals"]
 
                 if col_bal > 0:
                     usd_val = (col_bal / 10**decimals) * price
-                    if price == 0:
-                        # Safety: If price discovery fails, do not proceed with 0.0000 HF
-                        return None
-                    total_fresh_weighted_col += usd_val * config["threshold"]
-                    score = usd_val * (1 + config["bonus"]) if cfg("strategy", "prioritize_high_bonus") else usd_val
+
+                    threshold = config["threshold"]
+                    bonus     = config["bonus"]
+                    if user_emode > 0 and config["emode_category"] == user_emode:
+                        threshold = emode_threshold or threshold
+                        bonus     = emode_bonus if emode_bonus is not None else bonus
+
+                    total_fresh_weighted_col += usd_val * threshold
+                    score = usd_val * (1 + bonus) if cfg("strategy", "prioritize_high_bonus") else usd_val
                     if score > best_col_score:
                         best_col_score = score
-                        best_col = (addr, sym, config["bonus"])
+                        best_col = (addr, sym, bonus)
 
                 if debt_bal > 0:
                     usd_val = (debt_bal / 10**decimals) * price
-                    if price == 0:
-                        # Safety: If price discovery fails, do not proceed with 0.0000 HF
-                        return None
                     total_fresh_debt += usd_val
                     if usd_val > best_debt_score:
                         best_debt_score = usd_val
                         best_debt = (addr, sym, debt_bal)
             except Exception: continue
 
-        if not best_col or not best_debt or total_fresh_debt == 0:
+        if missing_price or not best_col or not best_debt or total_fresh_debt == 0:
+            # If we miss ANY price for an asset the user holds, the local HF
+            # will be incorrect. Fall back to protocol HF.
             return None
 
         fresh_hf = total_fresh_weighted_col / total_fresh_debt
+        # Calculate the total USD value of all collateral assets (unweighted)
+        total_col_usd_unweighted = 0
+        for i, (addr, config) in enumerate(token_list):
+            rd = w3.codec.decode(["uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint40", "bool"], return_data[i])
+            if rd[0] > 0:
+                price = get_token_price_usd(addr)
+                total_col_usd_unweighted += (rd[0] / 10**config["decimals"]) * price
+
+        # We need the weighted average liquidation threshold to perform
+        # accurate local math in the real-time tracker.
+        # HF = (Total Collateral USD * Avg Threshold) / Total Debt USD
+        avg_threshold = total_fresh_weighted_col / total_col_usd_unweighted if total_col_usd_unweighted > 0 else 0
+
         return {
             "fresh_hf": fresh_hf,
             "col_token": best_col[0], "col_symbol": best_col[1], "col_bonus": best_col[2],
-            "debt_token": best_debt[0], "debt_symbol": best_debt[1], "debt_raw": best_debt[2]
+            "col_price": get_token_price_usd(best_col[0]),
+            "debt_token": best_debt[0], "debt_symbol": best_debt[1], "debt_raw": best_debt[2],
+            "debt_price": get_token_price_usd(best_debt[0]),
+            "used_threshold": avg_threshold
         }
 
-    def check_position(self, user: str, account_data: Optional[tuple] = None) -> Optional[dict]:
+    def check_position(self, user: str, account_data: Optional[tuple] = None, force_fresh: bool = False) -> Optional[dict]:
         """
         Check a single user's health factor. Returns position dict if liquidatable
         or approaching liquidation. Returns None if healthy.
@@ -242,7 +336,7 @@ class ProtocolMonitor:
 
             # Watch everything up to 1.15
             if hf < 1.3:
-                best_info = self._get_best_tokens_and_fresh_hf(user)
+                best_info = self._get_best_tokens_and_fresh_hf(user, force_fresh=force_fresh)
                 if best_info: hf = best_info["fresh_hf"]
 
             col_usd    = wei_to_usd_base(total_col_base)
@@ -265,30 +359,41 @@ class ProtocolMonitor:
             debt_symbol  = best_info["debt_symbol"]
             debt_raw     = best_info["debt_raw"]
 
-            # Close factor: 100% if HF < 0.95 OR position < $2k, else 50%
+            # Compatibility for real-time tracker keys
+            pos_out = {
+                "protocol":          self.name,
+                "user":              user,
+                "address":           user,
+                "collateral_token":  col_token,
+                "col_token":         col_token,
+                "collateral_symbol": col_symbol,
+                "col_symbol":        col_symbol,
+                "collateral_bonus":  col_bonus,
+                "col_bonus":         col_bonus,
+                "debt_token":        debt_token,
+                "debt_symbol":       debt_symbol,
+                "debt_to_cover":     0, # Placeholder
+                "health_factor":     hf,
+                "col_price":         best_info["col_price"],
+                "debt_price":        best_info["debt_price"],
+                "total_debt_usd":    debt_usd,
+                "total_col_usd":     col_usd,
+                "pool_address":      self.pool_addr,
+                "used_threshold":    best_info.get("used_threshold"),
+            }
+
+            # Close factor: 100% if hf < 0.95 OR position < $2k, else 50%
             close_factor = cfg("strategy", "close_factor")
             if hf < 0.95 or debt_usd < 2000:
                 close_factor = 1.0
 
             debt_to_cover = int(debt_raw * close_factor)
-            _, _, swap_params = get_best_swap(col_token, debt_token, debt_to_cover)
+            pos_out["debt_to_cover"] = debt_to_cover
 
-            return {
-                "protocol":          self.name,
-                "user":              user,
-                "address":           user,
-                "collateral_token":  col_token,
-                "collateral_symbol": col_symbol,
-                "collateral_bonus":  col_bonus,
-                "debt_token":        debt_token,
-                "debt_symbol":       debt_symbol,
-                "debt_to_cover":     debt_to_cover,
-                "health_factor":     hf,
-                "total_debt_usd":    debt_usd,
-                "total_col_usd":     col_usd,
-                "pool_address":      self.pool_addr,
-                "swap_params":       swap_params,
-            }
+            _, _, swap_params = get_best_swap(col_token, debt_token, debt_to_cover)
+            pos_out["swap_params"] = swap_params
+
+            return pos_out
         except Exception as e:
             logger.debug(f"[{self.name}] check_position error for {user[:8]}: {e}")
             return None
@@ -438,20 +543,28 @@ class MultiProtocolMonitor:
 
                 monitor.load_borrowers_from_events(from_block, current_block, on_batch_found=_streaming_callback)
 
-    def refresh_borrowers(self):
+    def refresh_borrowers(self, hours: int = 1):
+        """Systematic deep scan for new borrowers (default every 1hr)."""
         try:
             w3 = get_web3()
             current_block = w3.eth.block_number
         except Exception: return
 
+        # Arbitrum is ~4 blocks per second. 1hr = 14400 blocks.
+        blocks_per_hr = 14400
+        lookback = hours * blocks_per_hr
+
         for name, monitor in self.monitors.items():
             last_block = get_last_scan_block(name)
-            from_block = (last_block + 1) if last_block > 0 else (current_block - 1000)
+            # Ensure we don't skip blocks, but also don't scan too far back if first run
+            from_block = (last_block + 1) if last_block > 0 else (current_block - lookback)
             
             if from_block < current_block:
+                logger.info(f"[{name}] Periodic borrower refresh: {from_block:,} -> {current_block:,}")
                 def _streaming_callback(proto_name, users):
                     m = self.monitors.get(proto_name)
                     if not m: return
+                    # Scan new borrowers immediately to see if they are at risk
                     found = m.scan_users(users, zombie_queue=self.zombie_queue)
                     if found:
                         liquidatable = [p for p in found if p.get("health_factor", 2.0) <= 1.0]
@@ -461,6 +574,21 @@ class MultiProtocolMonitor:
                             upsert_position(pos)
 
                 monitor.load_borrowers_from_events(from_block, current_block, on_batch_found=_streaming_callback)
+
+    def scan_zombies(self, force_fresh: bool = False):
+        """High-frequency scan of active users in the Zombie Queue."""
+        watching = self.zombie_queue.get_watching()
+        if not watching: return []
+
+        liquidatable = []
+        for pos in watching:
+            m = self.monitors.get(pos['protocol'])
+            if m:
+                # check_position already updates persistence and zombie queue
+                res = m.check_position(pos['user'], force_fresh=force_fresh)
+                if res and res.get('health_factor', 2.0) <= 1.0:
+                    liquidatable.append(res)
+        return liquidatable
 
     def scan_all_protocols(self) -> List[dict]:
         all_liquidatable = []

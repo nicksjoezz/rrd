@@ -43,10 +43,19 @@ class JsonStore:
     def save(self):
         """Atomic save to disk."""
         tmp_path = self.path.with_suffix(".tmp")
+
+        from decimal import Decimal
+        def json_serial(obj):
+            if isinstance(obj, bytes):
+                return "0x" + obj.hex()
+            if isinstance(obj, Decimal):
+                return float(obj)
+            raise TypeError(f"Type {type(obj)} not serializable")
+
         try:
             with self._lock:
                 with open(tmp_path, "w") as f:
-                    json.dump(self._data, f, indent=2)
+                    json.dump(self._data, f, indent=2, default=json_serial)
                 if self.path.exists():
                     os.remove(self.path)
                 os.rename(tmp_path, self.path)
