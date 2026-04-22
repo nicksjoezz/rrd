@@ -169,7 +169,10 @@ class ArbMonitor:
         3. Triggers immediate price check on any relevant buy/sell.
         """
         from websockets import connect
-        SWAP_TOPIC = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
+        # Topic 0 for Uniswap V3 / Algebra Swap
+        TOPIC_V3 = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
+        # Topic 0 for Uniswap V2 / Camelot Legacy Swap
+        TOPIC_V2 = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"
 
         keys = cfg("network", "alchemy_keys")
         if not keys: return
@@ -180,10 +183,11 @@ class ArbMonitor:
             wss_url = f"wss://arb-mainnet.g.alchemy.com/v2/{key}"
             try:
                 async with connect(wss_url) as ws:
-                    # We subscribe to ALL swap logs on the chain but filter LOCALLY
-                    # to keep subscription logic simple and handle dynamic watchlist updates.
-                    # This is free on Alchemy (logs subscription).
-                    sub = {"jsonrpc":"2.0", "id":1, "method":"eth_subscribe", "params":["logs", {"topics":[SWAP_TOPIC]}]}
+                    # We subscribe to BOTH V2 and V3 Swap topics
+                    sub = {
+                        "jsonrpc":"2.0", "id":1, "method":"eth_subscribe",
+                        "params":["logs", {"topics":[[TOPIC_V3, TOPIC_V2]]}]
+                    }
                     await ws.send(json.dumps(sub))
                     await ws.recv()
                     logger.info(f"Sentinel WSS active on key {key_idx % len(keys)}")
