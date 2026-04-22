@@ -29,6 +29,14 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 LOG_PATH = ROOT / "logs" / "bot.log"
 LOG_PATH.parent.mkdir(exist_ok=True)
 
+class LogTailer(logging.Handler):
+    def __init__(self, socketio):
+        super().__init__()
+        self.socketio = socketio
+    def emit(self, record):
+        msg = self.format(record)
+        self.socketio.emit("log_line", msg)
+
 # ── Bot engine state ──────────────────────────────────────────────────────────
 _bot_running  = threading.Event()
 _bot_lock     = threading.Lock()
@@ -136,7 +144,11 @@ def api_bot_status():
 @app.route("/api/bot/start", methods=["POST"])
 def api_bot_start():
     ok = start_bot_engine()
-    return jsonify({"ok": ok, "msg": "Started -- monitoring 24/7" if ok else "Already running"})
+    return jsonify({
+        "ok": ok,
+        "msg": "Started -- monitoring 24/7" if ok else "Already running",
+        "pid": os.getpid() if ok else None
+    })
 
 @app.route("/api/bot/stop", methods=["POST"])
 def api_bot_stop():
@@ -219,6 +231,11 @@ def main():
     parser.add_argument("--port",   type=int, default=5000)
     parser.add_argument("--host",   type=str, default="0.0.0.0")
     args = parser.parse_args()
+
+    # Add real-time log tailing
+    handler = LogTailer(socketio)
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", "%Y-%m-%d %H:%M:%S"))
+    logger.addHandler(handler)
 
     threading.Thread(target=_push_loop, daemon=True, name="push").start()
 

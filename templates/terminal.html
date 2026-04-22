@@ -159,6 +159,7 @@ function escHtml(str) {
 function onLogLine(line) {
   addLine(line);
 }
+socket.on('log_line', line => addLine(line));
 
 async function startBot() {
   const r = await fetch('/api/bot/start', { method:'POST' });
