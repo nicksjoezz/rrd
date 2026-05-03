@@ -3,13 +3,8 @@ pragma solidity ^0.8.19;
 
 /**
  * @title FlashLoanArbitrage
- * @dev Hybrid Sentinel Arbitrage Executor
- * Flow:
- * 1. Flash borrow USDC from Uniswap V3.
- * 2. Buy TokenX on Camelot (V2 or V3/Algebra).
- * 3. Sell TokenX back to USDC on Uniswap V3.
- * 4. Repay flash loan + fee.
- * 5. Keep profit in contract or send to owner.
+ * @dev Flexible Arbitrage Executor for Multi-hop paths.
+ * Supports Uniswap V2, Uniswap V3, Camelot V2, and Camelot V3 (Algebra).
  */
 
 interface IERC20 {
@@ -29,6 +24,16 @@ interface IUniswapV3Pool {
     ) external;
 }
 
+interface IUniswapV2Router {
+    function swapExactTokensForTokensSupportingFeeOnTransferTokens(
+        uint amountIn,
+        uint amountOutMin,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external;
+}
+
 interface ICamelotRouter {
     function swapExactTokensForTokensSupportingFeeOnTransferTokens(
         uint amountIn,
@@ -38,19 +43,6 @@ interface ICamelotRouter {
         address referrer,
         uint deadline
     ) external;
-}
-
-interface ICamelotV3Router {
-    struct ExactInputSingleParams {
-        address tokenIn;
-        address tokenOut;
-        address recipient;
-        uint256 deadline;
-        uint256 amountIn;
-        uint256 amountOutMinimum;
-        uint160 limitSqrtPrice;
-    }
-    function exactInputSingle(ExactInputSingleParams calldata params) external returns (uint256 amountOut);
 }
 
 interface ISwapRouter {
@@ -67,15 +59,38 @@ interface ISwapRouter {
     function exactInputSingle(ExactInputSingleParams calldata params) external returns (uint256 amountOut);
 }
 
+interface ICamelotV3Router {
+    struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        address recipient;
+        uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 limitSqrtPrice;
+    }
+    function exactInputSingle(ExactInputSingleParams calldata params) external returns (uint256 amountOut);
+}
+
 contract FlashLoanArbitrage {
     address public owner;
 
     // Arbitrum Mainnet Addresses
-    address public constant CAMELOT_V2_ROUTER = 0xc873fEcbd354f5A56E00E710B90EF4201db2448d;
-    address public constant CAMELOT_V3_ROUTER = 0x1F721E2E82F6676FCE4eA07A5958cF098D339e18; // Algebra
     address public constant UNIV3_ROUTER      = 0xE592427A0AEce92De3Edee1F18E0157C05861564;
+    address public constant UNIV2_ROUTER      = 0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24;
+    address public constant CAMELOT_V2_ROUTER = 0xc873fEcbd354f5A56E00E710B90EF4201db2448d;
+    address public constant CAMELOT_V3_ROUTER = 0x1F721E2E82F6676FCE4eA07A5958cF098D339e18;
 
-    event ArbExecuted(address token, uint256 amountIn, uint256 profit);
+    enum DexType { UNIV2, UNIV3, CAMELOTV2, CAMELOTV3 }
+
+    struct SwapStep {
+        DexType dex;
+        address tokenIn;
+        address tokenOut;
+        uint24 fee; // for UniV3
+    }
+
+    event ArbExecuted(uint256 amountIn, uint256 profit);
 
     constructor() {
         owner = msg.sender;
@@ -86,34 +101,22 @@ contract FlashLoanArbitrage {
         _;
     }
 
-    /**
-     * @notice Initiates the arbitrage.
-     * @param flashPool The UniV3 pool to borrow USDC from.
-     * @param tokenX The target token to arbitrage.
-     * @param tokenUSDC The USDC token address.
-     * @param amountUSDC Amount to borrow.
-     * @param uniV3Fee The fee of the UniV3 pool for the sell leg.
-     * @param minProfit Minimum profit required (in USDC decimals).
-     * @param isCamelotV3 True if using Camelot V3 for the buy leg.
-     */
     function executeArb(
         address flashPool,
-        address tokenX,
-        address tokenUSDC,
-        uint256 amountUSDC,
-        uint24 uniV3Fee,
-        uint256 minProfit,
-        bool isCamelotV3
+        uint256 amountFlash,
+        address tokenFlash,
+        SwapStep[] calldata steps,
+        uint256 minProfit
     ) external onlyOwner {
-        bool isToken0 = IUniswapV3Pool(flashPool).token0() == tokenUSDC;
-        uint256 amount0 = isToken0 ? amountUSDC : 0;
-        uint256 amount1 = isToken0 ? 0 : amountUSDC;
+        bool isToken0 = IUniswapV3Pool(flashPool).token0() == tokenFlash;
+        uint256 amount0 = isToken0 ? amountFlash : 0;
+        uint256 amount1 = isToken0 ? 0 : amountFlash;
 
         IUniswapV3Pool(flashPool).flash(
             address(this),
             amount0,
             amount1,
-            abi.encode(flashPool, tokenX, tokenUSDC, amountUSDC, uniV3Fee, minProfit, isCamelotV3)
+            abi.encode(flashPool, tokenFlash, amountFlash, steps, minProfit)
         );
     }
 
@@ -122,74 +125,85 @@ contract FlashLoanArbitrage {
         uint256 fee1,
         bytes calldata data
     ) external {
-        (address flashPool, address tokenX, address tokenUSDC, uint256 amountUSDC, uint24 uniV3Fee, uint256 minProfit, bool isCamelotV3) =
-            abi.decode(data, (address, address, address, uint256, uint24, uint256, bool));
+        (address flashPool, address tokenFlash, uint256 amountFlash, SwapStep[] memory steps, uint256 minProfit) =
+            abi.decode(data, (address, address, uint256, SwapStep[], uint256));
 
         require(msg.sender == flashPool, "Unauthorized callback");
 
         uint256 fee = fee0 > 0 ? fee0 : fee1;
-        uint256 amountToRepay = amountUSDC + fee;
-        uint256 balBefore = IERC20(tokenUSDC).balanceOf(address(this));
+        uint256 amountToRepay = amountFlash + fee;
+        uint256 balBefore = IERC20(tokenFlash).balanceOf(address(this));
 
-        // 1. Leg 1: Buy TokenX on Camelot
-        if (isCamelotV3) {
-            IERC20(tokenUSDC).approve(CAMELOT_V3_ROUTER, amountUSDC);
-            ICamelotV3Router(CAMELOT_V3_ROUTER).exactInputSingle(
-                ICamelotV3Router.ExactInputSingleParams({
-                    tokenIn: tokenUSDC,
-                    tokenOut: tokenX,
-                    recipient: address(this),
-                    deadline: block.timestamp,
-                    amountIn: amountUSDC,
-                    amountOutMinimum: 0,
-                    limitSqrtPrice: 0
-                })
-            );
-        } else {
-            IERC20(tokenUSDC).approve(CAMELOT_V2_ROUTER, amountUSDC);
-            address[] memory path = new address[](2);
-            path[0] = tokenUSDC;
-            path[1] = tokenX;
+        for (uint256 i = 0; i < steps.length; i++) {
+            SwapStep memory step = steps[i];
+            uint256 amountIn = IERC20(step.tokenIn).balanceOf(address(this));
 
-            ICamelotRouter(CAMELOT_V2_ROUTER).swapExactTokensForTokensSupportingFeeOnTransferTokens(
-                amountUSDC,
-                0,
-                path,
-                address(this),
-                address(0),
-                block.timestamp
-            );
+            if (step.dex == DexType.UNIV3) {
+                IERC20(step.tokenIn).approve(UNIV3_ROUTER, amountIn);
+                ISwapRouter(UNIV3_ROUTER).exactInputSingle(
+                    ISwapRouter.ExactInputSingleParams({
+                        tokenIn: step.tokenIn,
+                        tokenOut: step.tokenOut,
+                        fee: step.fee,
+                        recipient: address(this),
+                        deadline: block.timestamp,
+                        amountIn: amountIn,
+                        amountOutMinimum: 0,
+                        sqrtPriceLimitX96: 0
+                    })
+                );
+            } else if (step.dex == DexType.CAMELOTV3) {
+                IERC20(step.tokenIn).approve(CAMELOT_V3_ROUTER, amountIn);
+                ICamelotV3Router(CAMELOT_V3_ROUTER).exactInputSingle(
+                    ICamelotV3Router.ExactInputSingleParams({
+                        tokenIn: step.tokenIn,
+                        tokenOut: step.tokenOut,
+                        recipient: address(this),
+                        deadline: block.timestamp,
+                        amountIn: amountIn,
+                        amountOutMinimum: 0,
+                        limitSqrtPrice: 0
+                    })
+                );
+            } else if (step.dex == DexType.CAMELOTV2) {
+                IERC20(step.tokenIn).approve(CAMELOT_V2_ROUTER, amountIn);
+                address[] memory path = new address[](2);
+                path[0] = step.tokenIn;
+                path[1] = step.tokenOut;
+                ICamelotRouter(CAMELOT_V2_ROUTER).swapExactTokensForTokensSupportingFeeOnTransferTokens(
+                    amountIn,
+                    0,
+                    path,
+                    address(this),
+                    address(0),
+                    block.timestamp
+                );
+            } else if (step.dex == DexType.UNIV2) {
+                IERC20(step.tokenIn).approve(UNIV2_ROUTER, amountIn);
+                address[] memory path = new address[](2);
+                path[0] = step.tokenIn;
+                path[1] = step.tokenOut;
+                IUniswapV2Router(UNIV2_ROUTER).swapExactTokensForTokensSupportingFeeOnTransferTokens(
+                    amountIn,
+                    0,
+                    path,
+                    address(this),
+                    block.timestamp
+                );
+            }
         }
 
-        // 2. Leg 2: Sell TokenX on UniV3
-        uint256 tokenXBal = IERC20(tokenX).balanceOf(address(this));
-        IERC20(tokenX).approve(UNIV3_ROUTER, tokenXBal);
+        // Repay
+        IERC20(tokenFlash).transfer(msg.sender, amountToRepay);
 
-        ISwapRouter(UNIV3_ROUTER).exactInputSingle(
-            ISwapRouter.ExactInputSingleParams({
-                tokenIn: tokenX,
-                tokenOut: tokenUSDC,
-                fee: uniV3Fee,
-                recipient: address(this),
-                deadline: block.timestamp,
-                amountIn: tokenXBal,
-                amountOutMinimum: amountToRepay + minProfit,
-                sqrtPriceLimitX96: 0
-            })
-        );
+        uint256 balAfter = IERC20(tokenFlash).balanceOf(address(this));
+        require(balAfter >= balBefore + minProfit, "Insufficient profit");
 
-        // 3. Repay Flash Loan
-        IERC20(tokenUSDC).transfer(msg.sender, amountToRepay);
+        emit ArbExecuted(amountFlash, balAfter - balBefore);
 
-        // 4. Final verification
-        uint256 balAfter = IERC20(tokenUSDC).balanceOf(address(this));
-        require(balAfter >= balBefore + minProfit, "Insufficient Profit");
-
-        emit ArbExecuted(tokenX, amountUSDC, balAfter - balBefore);
-
-        // Auto-withdraw profit to owner
+        // Withdraw profit
         if (balAfter > 0) {
-            IERC20(tokenUSDC).transfer(owner, balAfter);
+            IERC20(tokenFlash).transfer(owner, balAfter);
         }
     }
 

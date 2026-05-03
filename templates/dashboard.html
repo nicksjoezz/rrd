@@ -46,12 +46,12 @@
     <div class="stat-sub" id="d-today-liqs">Today: 0</div>
   </div>
   <div class="stat-block animate-in">
-    <div class="stat-label">Tokens Watched</div>
+    <div class="stat-label">Paths Watched</div>
     <div class="stat-value" id="d-borrowers">0</div>
-    <div class="stat-sub">Arb-Ready Tokens</div>
+    <div class="stat-sub">Arb-Ready Paths</div>
   </div>
   <div class="stat-block animate-in">
-    <div class="stat-label">Max Gap Found</div>
+    <div class="stat-label">Max Profit Found</div>
     <div class="stat-value" id="d-zombie">—</div>
     <div class="stat-sub">Current Opportunity</div>
   </div>
@@ -69,10 +69,10 @@
     </div>
   </div>
 
-  <!-- Watchlist tokens -->
+  <!-- Watchlist paths -->
   <div class="card">
     <div class="card-header">
-      <div class="card-title"><span class="dot"></span> Watchlist Tokens</div>
+      <div class="card-title"><span class="dot"></span> Watchlist Paths</div>
       <a href="/positions" class="btn btn-sm" style="text-decoration:none">WATCHLIST →</a>
     </div>
     <div class="card-body" style="padding:0">
@@ -80,14 +80,13 @@
       <table class="data-table" id="approaching-tbl">
         <thead>
           <tr>
-            <th>TOKEN</th>
+            <th>TYPE</th>
             <th>SYMBOL</th>
-            <th>UNIV3 POOL</th>
-            <th>CAMELOT POOL</th>
+            <th>DEXES</th>
           </tr>
         </thead>
         <tbody id="approaching-body">
-          <tr><td colspan="4" class="dim" style="text-align:center;padding:24px">Scanning…</td></tr>
+          <tr><td colspan="3" class="dim" style="text-align:center;padding:24px">Scanning…</td></tr>
         </tbody>
       </table>
     </div>
@@ -105,12 +104,12 @@
       <table class="data-table" id="recent-tbl">
       <thead>
         <tr>
-          <th>TIME</th><th>TOKEN</th><th>SYMBOL</th>
-          <th>UNI POOL</th><th>CAMELOT</th><th>EST. PROFIT</th><th>TX</th>
+          <th>TIME</th><th>SYMBOL</th><th>TYPE</th>
+          <th>EST. PROFIT</th><th>TX</th>
         </tr>
       </thead>
       <tbody id="recent-body">
-        <tr><td colspan="7" class="dim" style="text-align:center;padding:24px">No arbitrages yet</td></tr>
+        <tr><td colspan="5" class="dim" style="text-align:center;padding:24px">No arbitrages yet</td></tr>
       </tbody>
     </table>
     </div>
@@ -143,10 +142,8 @@ function onStats(d) {
       const simBadge = isSim ? '<span class="sim-tag">[SIM]</span> ' : '';
       return `<tr class="${isSim ? 'sim-row' : ''}">
         <td class="dim">${ts}</td>
-        <td class="mono cyan">${fmtAddr(r.token)}</td>
         <td class="amber">${r.symbol}</td>
-        <td class="mono dim">${fmtAddr(r.univ3Pool)}</td>
-        <td class="mono dim">${fmtAddr(r.camelotPool)}</td>
+        <td class="cyan">${r.type || 'dual'}</td>
         <td class="${pColor}">${simBadge}${fmtUSD(profit)}</td>
         <td class="dim" style="font-size:9px">${tx}</td>
       </tr>`;
@@ -158,16 +155,15 @@ function onPositions(positions) {
   const tbody = document.getElementById('approaching-body');
 
   if (!positions.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="dim" style="text-align:center;padding:20px">No tokens watched</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="3" class="dim" style="text-align:center;padding:20px">No paths watched</td></tr>';
     return;
   }
 
   tbody.innerHTML = positions.slice(0,8).map(p => {
     return `<tr>
-      <td class="mono dim">${fmtAddr(p.address)}</td>
-      <td class="cyan">${p.symbol}</td>
-      <td class="amber mono" style="font-size:10px">${fmtAddr(p.univ3Pool)}</td>
-      <td class="green mono" style="font-size:10px">${fmtAddr(p.camelotPool)}</td>
+      <td class="cyan">${p.type.toUpperCase()}</td>
+      <td class="amber mono" style="font-size:11px">${p.symbol}</td>
+      <td class="green mono" style="font-size:10px">${p.dexes.join(' → ')}</td>
     </tr>`;
   }).join('');
 }
