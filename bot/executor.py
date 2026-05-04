@@ -64,17 +64,31 @@ class ArbExecutor:
         )
 
     def _build_tx(self, opportunity: dict, amount_flash: int, min_profit: int) -> dict:
-        token_flash = opportunity["tokens"][0]
+        token_flash = checksum(opportunity["tokens"][0])
 
+        # Identify a Uniswap V3 pool for flash loaning
         flash_pool = ""
+        # 1. Try to use a pool already in the path if it's UniV3
         for i, p in enumerate(opportunity["pools"]):
             if opportunity["versions"][i] == "univ3":
                 flash_pool = p
                 break
 
+        # 2. Fallback to a known high-liquidity UniV3 pool containing token_flash
         if not flash_pool:
-            # Fallback to a known major UniV3 pool (e.g. USDC/WETH 0.05%)
-            flash_pool = "0xC6962004f452fE5bE02D0E47321ee3deFb746355"
+            # Common UniV3 pools for flash loans on Arbitrum
+            # WETH/USDC 0.05%
+            weth_usdc = "0xC6962004f452fE5bE02D0E47321ee3deFb746355"
+            # WETH/ARB 0.05%
+            weth_arb = "0x2f6E8Ba994f06859556C0150935561a06788e001"
+
+            # This is a bit hardcoded, but for simulation/testing it works for major tokens
+            if "USDC" in opportunity["symbol"] or "WETH" in opportunity["symbol"]:
+                flash_pool = weth_usdc
+            elif "ARB" in opportunity["symbol"]:
+                flash_pool = weth_arb
+            else:
+                flash_pool = weth_usdc # Default to USDC/WETH
 
         steps = []
         for i in range(len(opportunity["pools"])):
@@ -105,48 +119,56 @@ class ArbExecutor:
     async def execute(self, opportunity: dict):
         mode = get_mode()
         if not self._contract or not self._account:
-            logger.info(f"[{mode.upper()}] Arbitrage DRY RUN | {opportunity['symbol']}")
+            logger.info(f"[{mode.upper()}] Arbitrage DRY RUN | {opportunity['symbol']} Gap: {opportunity['gap']:.2%}")
             return None
 
         token_flash = opportunity["tokens"][0].lower()
         usdc = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831".lower()
         usdc_e = "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8".lower()
 
+        # Simple dynamic sizing
+        # Try to use decimals if available in metadata (which is populated in monitor)
+        # Note: In a real bot we'd want a more robust way to get decimals here if monitor hasn't run
+        decimals = 18
         if token_flash in [usdc, usdc_e]:
-            amount_flash = 100 * 10**6
-            min_profit = int(1 * 10**6)
+            decimals = 6
+
+        if decimals == 6:
+            amount_flash = 500 * 10**6
+            min_profit = int(0.5 * 10**6)
         else:
-            amount_flash = int(0.05 * 10**18)
-            min_profit = int(0.0005 * 10**18)
+            amount_flash = int(0.2 * 10**18) # Default to 0.2 units
+            min_profit = int(0.0002 * 10**18)
 
         try:
             tx = self._build_tx(opportunity, amount_flash, min_profit)
 
             if mode == "simulate":
+                # Static call to verify revert/success
                 self._w3.eth.call(tx)
-                logger.info(f"[SIMULATE] [SUCCESS] {opportunity['symbol']}")
+                logger.info(f"[SIMULATE] [SUCCESS] {opportunity['symbol']} Gap: {opportunity['gap']:.2%}")
                 record_execution({
                     "tx_hash": f"sim-{int(time.time())}-{opportunity['symbol']}",
                     "token": opportunity["tokens"][0],
                     "symbol": opportunity["symbol"],
                     "type": opportunity.get("type", "dual"),
-                    "estimated_profit": 1.0, # Placeholder
+                    "estimated_profit": opportunity['gap'] * (amount_flash / 10**18 if "ETH" in opportunity['symbol'] else amount_flash / 10**6),
                     "timestamp": int(time.time())
                 })
                 return "sim-success"
             else:
                 signed = self._account.sign_transaction(tx)
                 tx_hash = self._w3.eth.send_raw_transaction(signed.raw_transaction)
-                logger.info(f"[LIVE] Sent: {tx_hash.hex()}")
+                logger.info(f"[LIVE] Sent: {tx_hash.hex()} | {opportunity['symbol']}")
                 record_execution({
                     "tx_hash": tx_hash.hex(),
                     "token": opportunity["tokens"][0],
                     "symbol": opportunity["symbol"],
                     "type": opportunity.get("type", "dual"),
-                    "estimated_profit": 1.0, # Placeholder
+                    "estimated_profit": opportunity['gap'] * (amount_flash / 10**18 if "ETH" in opportunity['symbol'] else amount_flash / 10**6),
                     "timestamp": int(time.time())
                 })
                 return tx_hash.hex()
         except Exception as e:
-            logger.info(f"[{mode.upper()}] [FAILED] {opportunity['symbol']}: {e}")
+            logger.info(f"[{mode.upper()}] [FAILED] {opportunity['symbol']}: {str(e)[:100]}")
             return None

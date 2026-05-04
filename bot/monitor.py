@@ -16,15 +16,16 @@ WATCHLIST_PATH = ROOT_DIR / "logs" / "watchlist.json"
 UNIV3_POOL_ABI = json.loads('[{"inputs":[],"name":"slot0","outputs":[{"internalType":"uint160","name":"sqrtPriceX96","type":"uint160"},{"internalType":"int24","name":"tick","type":"int24"},{"internalType":"uint16","name":"observationIndex","type":"uint16"},{"internalType":"uint16","name":"observationLength","type":"uint16"},{"internalType":"uint16","name":"observationLengthNext","type":"uint16"},{"internalType":"uint8","name":"feeProtocol","type":"uint8"},{"internalType":"bool","name":"unlocked","type":"bool"}],"stateMutability":"view","type":"function"}]')
 ALGEBRA_POOL_ABI = json.loads('[{"inputs":[],"name":"globalState","outputs":[{"internalType":"uint160","name":"price","type":"uint160"},{"internalType":"int24","name":"tick","type":"int24"},{"internalType":"uint16","name":"fee","type":"uint16"},{"internalType":"uint16","name":"timepointIndex","type":"uint16"},{"internalType":"uint16","name":"communityFeeToken0","type":"uint16"},{"internalType":"uint16","name":"communityFeeToken1","type":"uint16"},{"internalType":"bool","name":"unlocked","type":"bool"}],"stateMutability":"view","type":"function"}]')
 CAMELOT_POOL_ABI = json.loads('[{"inputs":[],"name":"getReserves","outputs":[{"internalType":"uint112","name":"reserve0","type":"uint112"},{"internalType":"uint112","name":"reserve1","type":"uint112"},{"internalType":"uint32","name":"blockTimestampLast","type":"uint32"}],"stateMutability":"view","type":"function"}]')
-ERC20_ABI = json.loads('[{"inputs":[],"name":"decimals","outputs":[{"internalType":"uint8","name":"","type":"uint8"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"token0","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"token1","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"}]')
+POOL_INFO_ABI = json.loads('[{"inputs":[],"name":"token0","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"token1","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"}]')
+ERC20_ABI = json.loads('[{"inputs":[],"name":"decimals","outputs":[{"internalType":"uint8","name":"","type":"uint8"}],"stateMutability":"view","type":"function"}]')
 
 class ArbMonitor:
     def __init__(self, on_opportunity=None):
         self.on_opportunity = on_opportunity
         self.watchlist = []
-        self.metadata = {}
+        self.metadata = {} # token_addr -> decimals
         self.w3 = get_web3()
-        self.pool_tokens = {}
+        self.pool_tokens = {} # pool_addr -> (t0, t1)
         self.watched_pools = set()
         self._load_watchlist()
 
@@ -37,6 +38,7 @@ class ArbMonitor:
                         self.watchlist = new_watchlist
                         self._update_watched_pools()
                         self._fetch_metadata()
+                        self._fetch_pool_tokens()
             except Exception as e:
                 logger.error(f"Error loading watchlist: {e}")
 
@@ -55,6 +57,7 @@ class ArbMonitor:
         needed = [t for t in tokens if t not in self.metadata]
         if not needed: return
 
+        logger.info(f"Fetching metadata for {len(needed)} tokens...")
         try:
             mc_contract = self.w3.eth.contract(address=checksum(MULTICALL3_ADDR), abi=MULTICALL3_ABI)
             calls = []
@@ -71,47 +74,74 @@ class ArbMonitor:
         except Exception as e:
             logger.error(f"Metadata fetch failed: {e}")
 
+    def _fetch_pool_tokens(self):
+        pools = set()
+        for item in self.watchlist:
+            for p in item["pools"]:
+                pools.add(p.lower())
+
+        needed = [p for p in pools if p not in self.pool_tokens]
+        if not needed: return
+
+        logger.info(f"Fetching token info for {len(needed)} pools...")
+        try:
+            mc_contract = self.w3.eth.contract(address=checksum(MULTICALL3_ADDR), abi=MULTICALL3_ABI)
+            calls = []
+            for p in needed:
+                p_contract = self.w3.eth.contract(address=checksum(p), abi=POOL_INFO_ABI)
+                calls.append((checksum(p), p_contract.encodeABI("token0")))
+                calls.append((checksum(p), p_contract.encodeABI("token1")))
+
+            _, return_data = mc_contract.functions.aggregate(calls).call()
+            for i, p in enumerate(needed):
+                try:
+                    t0 = self.w3.codec.decode(["address"], return_data[i*2])[0].lower()
+                    t1 = self.w3.codec.decode(["address"], return_data[i*2+1])[0].lower()
+                    self.pool_tokens[p] = (t0, t1)
+                except:
+                    pass
+        except Exception as e:
+            logger.error(f"Pool token fetch failed: {e}")
+
     def get_price_from_res(self, res, ptype, meta):
         if ptype == "univ3" or ptype == "algebra":
             sqrtP = self.w3.codec.decode(["uint160"], res[:32])[0]
+            # price_t0_in_t1 = (sqrtP / 2^96)^2 * (10^dec0 / 10^dec1)
             price_t0_in_t1 = (sqrtP / (2**96))**2 * (10**meta["dec0"] / 10**meta["dec1"])
             return price_t0_in_t1
         else:
+            # UniV2 / CamelotV2
             dec = self.w3.codec.decode(["uint112", "uint112", "uint32"], res)
             res0, res1 = dec[0], dec[1]
+            # price_t0_in_t1 = (res1 / 10^dec1) / (res0 / 10^dec0)
             return (res1 / 10**meta["dec1"]) / (res0 / 10**meta["dec0"]) if res0 > 0 else 0
 
     def check_all_prices_multicall(self):
         if not self.watchlist: return []
 
         opportunities = []
+        # We need a version of Multicall ABI that includes tryAggregate
         MC3_RESILIENT_ABI = json.loads('[{"inputs":[{"internalType":"bool","name":"requireSuccess","type":"bool"},{"components":[{"internalType":"address","name":"target","type":"address"},{"internalType":"bytes","name":"callData","type":"bytes"}],"internalType":"struct Multicall3.Call[]","name":"calls","type":"tuple[]"}],"name":"tryAggregate","outputs":[{"components":[{"internalType":"bool","name":"success","type":"bool"},{"internalType":"bytes","name":"returnData","type":"bytes"}],"internalType":"struct Multicall3.Result[]","name":"returnData","type":"tuple[]"}],"stateMutability":"payable","type":"function"}]')
         mc_contract = self.w3.eth.contract(address=checksum(MULTICALL3_ADDR), abi=MC3_RESILIENT_ABI)
 
         calls = []
         pool_meta = []
-
         added_pools = set()
 
         for item in self.watchlist:
             for i, p_addr in enumerate(item["pools"]):
                 p_addr = p_addr.lower()
-                if p_addr not in self.pool_tokens:
-                    try:
-                        p_contract = self.w3.eth.contract(address=checksum(p_addr), abi=ERC20_ABI)
-                        t0 = p_contract.functions.token0().call().lower()
-                        t1 = p_contract.functions.token1().call().lower()
-                        self.pool_tokens[p_addr] = (t0, t1)
-                    except: continue
-
+                if p_addr not in self.pool_tokens: continue
                 if p_addr in added_pools: continue
-                added_pools.add(p_addr)
 
+                added_pools.add(p_addr)
                 ptype = item["versions"][i]
                 if ptype in ["univ3", "algebra"]:
+                    # slot0() for UniV3, globalState() for Algebra
                     sig = "0x3850c7bd" if ptype == "univ3" else "0x1ad57897"
                     calls.append({"target": checksum(p_addr), "callData": sig})
                 else:
+                    # getReserves() for V2
                     calls.append({"target": checksum(p_addr), "callData": "0x0902f1ac"})
 
                 t0, t1 = self.pool_tokens[p_addr]
@@ -150,11 +180,13 @@ class ArbMonitor:
 
                     p_t0_t1 = prices[p_addr]
                     if t_in == t0:
+                        # token0 -> token1
                         amount *= p_t0_t1
                     else:
+                        # token1 -> token0
                         amount /= p_t0_t1 if p_t0_t1 > 0 else 1
 
-                if valid and amount > 1.005:
+                if valid and amount > 1.002: # 0.2% threshold
                     opportunities.append({
                         "symbol": item["symbol"],
                         "type": item["type"],
@@ -162,6 +194,7 @@ class ArbMonitor:
                         "pools": item["pools"],
                         "versions": item["versions"],
                         "fees": item["fees"],
+                        "gap": amount - 1.0,
                         "profit_pct": amount - 1.0,
                         "expected_output": amount
                     })
@@ -201,7 +234,7 @@ class ArbMonitor:
                     }
                     await ws.send(json.dumps(sub))
                     await ws.recv()
-                    logger.info(f"Sentinel WSS active on key {key_idx % len(keys)}")
+                    logger.info(f"Sentinel WSS active on key index {key_idx % len(keys)}")
 
                     while True:
                         msg = await ws.recv()

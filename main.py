@@ -35,7 +35,7 @@ class LogTailer(logging.Handler):
         self.socketio = socketio
     def emit(self, record):
         msg = self.format(record)
-        self.socketio.emit("log_line", msg)
+        self.socketio.emit("log_line", {"line": msg})
 
 # ── Bot engine state ──────────────────────────────────────────────────────────
 _bot_running  = threading.Event()
