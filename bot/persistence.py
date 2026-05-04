@@ -30,13 +30,20 @@ class HistoryManager:
         today_h = [r for r in h if r.get("timestamp", 0) >= today_start]
         today_profit = sum(float(r.get("estimated_profit", 0)) for r in today_h)
 
+        max_gap = 0
+        if h:
+            try:
+                max_gap = max(float(r.get("gap", 0)) for r in h)
+            except:
+                pass
+
         return {
             "total_profit_est_usd": total_profit,
             "today_profit_est_usd": today_profit,
             "total_liquidations": len(h),
             "today_liquidations": len(today_h),
             "total_borrowers": watchlist_count, # Overloaded for "Paths Watched"
-            "zombie_count": 0, # Max Gap Found placeholder
+            "zombie_count": f"{max_gap:.2%}",
             "recent": h[::-1][:10]
         }
 

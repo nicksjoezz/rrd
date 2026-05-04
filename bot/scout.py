@@ -52,6 +52,24 @@ FACTORIES = {
         "deploy_block": 178000000,
         "type": "univ2",
         "topic": Web3.keccak(text="PairCreated(address,address,address,uint256)").hex()
+    },
+    "sushiswap_v3": {
+        "address": "0x9Ad6C38BE97d639785469E877199988BB00C5922",
+        "deploy_block": 100000000,
+        "type": "univ3",
+        "topic": Web3.keccak(text="PoolCreated(address,address,uint24,int24,address)").hex()
+    },
+    "sushiswap_v2": {
+        "address": "0xc35DADB65012eC5796536bD9864eD8773aBc74C4",
+        "deploy_block": 100000000,
+        "type": "univ2",
+        "topic": Web3.keccak(text="PairCreated(address,address,address,uint256)").hex()
+    },
+    "ramses_v2": {
+        "address": "0xAA277CB791473f1A8e490227fd32626e956bc9bc",
+        "deploy_block": 150000000,
+        "type": "algebra",
+        "topic": Web3.keccak(text="Pool(address,address,address)").hex()
     }
 }
 
@@ -76,7 +94,7 @@ class OnChainScout:
             json.dump(self.pool_cache, f, indent=2)
 
     async def fetch_logs(self, factory_name, config, to_block):
-        # Scan last 50M blocks if no cache to find more pairs
+        # Scan last 50M blocks (~6 months) for broad coverage
         default_start = max(config["deploy_block"], to_block - 50000000)
         from_block = self.pool_cache["last_blocks"].get(factory_name, default_start)
 
@@ -88,8 +106,8 @@ class OnChainScout:
 
         logger.info(f"Scanning {factory_name} from {current} to {to_block}...")
 
-        # Limit per cycle to 5M blocks to prevent hanging
-        cycle_limit = 5000000
+        # Limit per cycle to 50M blocks to get more pairs quickly
+        cycle_limit = 50000000
         target_to = min(to_block, current + cycle_limit)
 
         while current < target_to:
@@ -223,16 +241,16 @@ class OnChainScout:
             pair = tuple(sorted([p["token0"].lower(), p["token1"].lower()]))
             by_pair[pair].append(p)
 
-        # Common base tokens for Arbitrum
-        usdc   = checksum("0xaf88d065e77c8cC2239327C5EDb3A432268e5831").lower()
-        usdc_e = checksum("0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8").lower()
-        weth   = checksum("0x82aF49447D8a07e3bd95BD0d56f35241523fBab1").lower()
-        arb    = checksum("0x912CE59144191C1204E64559FE8253a0e49E6548").lower()
-        usdt   = checksum("0xFd086bC7CD5C481DCC9C85ebE478A1C0b69Fcbb9").lower()
-        wbtc   = checksum("0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f").lower()
-        dai    = checksum("0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1").lower()
+        # Dynamic base token selection (Top 100 most connected tokens)
+        token_counts = defaultdict(int)
+        for p in pools:
+            token_counts[p["token0"].lower()] += 1
+            token_counts[p["token1"].lower()] += 1
 
-        base_tokens = [usdc, usdc_e, weth, arb, usdt, wbtc, dai]
+        # Sort by pool count and take top 100
+        sorted_tokens = sorted(token_counts.items(), key=lambda x: x[1], reverse=True)
+        base_tokens = [t[0] for t in sorted_tokens[:100]]
+        logger.info(f"Dynamically selected {len(base_tokens)} base tokens for triangular paths.")
 
         watchlist = []
         needed_tokens = set()
@@ -302,7 +320,7 @@ class OnChainScout:
         watchlist.sort(key=lambda x: (x["type"], x["symbol"]))
 
         # Limit watchlist size for stability
-        watchlist = watchlist[:1000]
+        watchlist = watchlist[:500]
 
         # Verify tokens vs pools length for all items
         valid_watchlist = []
