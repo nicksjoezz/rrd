@@ -35,7 +35,7 @@ class LogTailer(logging.Handler):
         self.socketio = socketio
     def emit(self, record):
         msg = self.format(record)
-        self.socketio.emit("log_line", msg)
+        self.socketio.emit("log_line", {"line": msg})
 
 # ── Bot engine state ──────────────────────────────────────────────────────────
 _bot_running  = threading.Event()
@@ -173,20 +173,23 @@ def api_mode_set():
 
 @app.route("/api/profit-history")
 def api_profit_history():
-    # Return mock or real history from persistence
+    """Returns aggregated profit history from persistence."""
     try:
         from bot.persistence import HISTORY_PATH
         if HISTORY_PATH.exists():
             with open(HISTORY_PATH, "r") as f:
                 data = json.load(f)
-            # Group by day and sum profit
+            # Group by day and sum profit & count
             history = {}
             for r in data:
                 day = time.strftime("%m/%d", time.localtime(r.get("timestamp", 0)))
-                history[day] = history.get(day, 0) + float(r.get("estimated_profit", 0))
+                if day not in history:
+                    history[day] = {"profit": 0, "count": 0}
+                history[day]["profit"] += float(r.get("estimated_profit", 0))
+                history[day]["count"] += 1
 
-            # Convert to list of {day, profit}
-            res = [{"day": d, "profit": p} for d, p in history.items()]
+            # Convert to list of {day, profit, count}
+            res = [{"day": d, "profit": v["profit"], "count": v["count"]} for d, v in history.items()]
             return jsonify(res)
     except:
         pass

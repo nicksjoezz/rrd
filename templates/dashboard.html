@@ -42,17 +42,17 @@
   </div>
   <div class="stat-block animate-in">
     <div class="stat-label">Arbitrages Executed</div>
-    <div class="stat-value" id="d-total-liqs">0</div>
-    <div class="stat-sub" id="d-today-liqs">Today: 0</div>
+    <div class="stat-value" id="d-total-arbs">0</div>
+    <div class="stat-sub" id="d-today-arbs">Today: 0</div>
   </div>
   <div class="stat-block animate-in">
-    <div class="stat-label">Tokens Watched</div>
-    <div class="stat-value" id="d-borrowers">0</div>
-    <div class="stat-sub">Arb-Ready Tokens</div>
+    <div class="stat-label">Paths Watched</div>
+    <div class="stat-value" id="d-watchlist">0</div>
+    <div class="stat-sub">Arb-Ready Paths</div>
   </div>
   <div class="stat-block animate-in">
     <div class="stat-label">Max Gap Found</div>
-    <div class="stat-value" id="d-zombie">—</div>
+    <div class="stat-value" id="d-max-gap">—</div>
     <div class="stat-sub">Current Opportunity</div>
   </div>
 </div>
@@ -69,10 +69,10 @@
     </div>
   </div>
 
-  <!-- Watchlist tokens -->
+  <!-- Watchlist paths -->
   <div class="card">
     <div class="card-header">
-      <div class="card-title"><span class="dot"></span> Watchlist Tokens</div>
+      <div class="card-title"><span class="dot"></span> Watchlist Paths</div>
       <a href="/positions" class="btn btn-sm" style="text-decoration:none">WATCHLIST →</a>
     </div>
     <div class="card-body" style="padding:0">
@@ -80,21 +80,20 @@
       <table class="data-table" id="approaching-tbl">
         <thead>
           <tr>
-            <th>TOKEN</th>
+            <th>TYPE</th>
             <th>SYMBOL</th>
-            <th>UNIV3 POOL</th>
-            <th>CAMELOT POOL</th>
+            <th>DEXES</th>
           </tr>
         </thead>
         <tbody id="approaching-body">
-          <tr><td colspan="4" class="dim" style="text-align:center;padding:24px">Scanning…</td></tr>
+          <tr><td colspan="3" class="dim" style="text-align:center;padding:24px">Scanning…</td></tr>
         </tbody>
       </table>
     </div>
   </div>
 </div>
 
-<!-- Recent liquidations -->
+<!-- Recent arbitrages -->
 <div class="card animate-in">
   <div class="card-header">
     <div class="card-title"><span class="dot"></span> Recent Arbitrages</div>
@@ -105,12 +104,12 @@
       <table class="data-table" id="recent-tbl">
       <thead>
         <tr>
-          <th>TIME</th><th>TOKEN</th><th>SYMBOL</th>
-          <th>UNI POOL</th><th>CAMELOT</th><th>EST. PROFIT</th><th>TX</th>
+          <th>TIME</th><th>SYMBOL</th><th>TYPE</th>
+          <th>EST. PROFIT</th><th>TX</th>
         </tr>
       </thead>
       <tbody id="recent-body">
-        <tr><td colspan="7" class="dim" style="text-align:center;padding:24px">No arbitrages yet</td></tr>
+        <tr><td colspan="5" class="dim" style="text-align:center;padding:24px">No arbitrages yet</td></tr>
       </tbody>
     </table>
     </div>
@@ -125,12 +124,12 @@ let profitChart = null;
 function onStats(d) {
   setEl('d-total-profit', fmtUSD(d.total_profit_est_usd));
   setEl('d-today-profit', 'Today: ' + fmtUSD(d.today_profit_est_usd));
-  setEl('d-total-liqs',   d.total_liquidations);
-  setEl('d-today-liqs',   'Today: ' + d.today_liquidations);
-  setEl('d-borrowers',    fmtNum(d.total_borrowers));
-  setEl('d-zombie',       d.zombie_count || 0);
+  setEl('d-total-arbs',   d.total_arbs);
+  setEl('d-today-arbs',   'Today: ' + d.today_arbs);
+  setEl('d-watchlist',    fmtNum(d.watchlist_count));
+  setEl('d-max-gap',      d.max_gap || "0.00%");
 
-  // Recent liquidations table
+  <!-- Recent arbitrages table -->
   const tbody = document.getElementById('recent-body');
   if (d.recent && d.recent.length) {
     tbody.innerHTML = d.recent.map(r => {
@@ -143,10 +142,8 @@ function onStats(d) {
       const simBadge = isSim ? '<span class="sim-tag">[SIM]</span> ' : '';
       return `<tr class="${isSim ? 'sim-row' : ''}">
         <td class="dim">${ts}</td>
-        <td class="mono cyan">${fmtAddr(r.token)}</td>
         <td class="amber">${r.symbol}</td>
-        <td class="mono dim">${fmtAddr(r.univ3Pool)}</td>
-        <td class="mono dim">${fmtAddr(r.camelotPool)}</td>
+        <td class="cyan">${r.type || 'dual'}</td>
         <td class="${pColor}">${simBadge}${fmtUSD(profit)}</td>
         <td class="dim" style="font-size:9px">${tx}</td>
       </tr>`;
@@ -158,16 +155,15 @@ function onPositions(positions) {
   const tbody = document.getElementById('approaching-body');
 
   if (!positions.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="dim" style="text-align:center;padding:20px">No tokens watched</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="3" class="dim" style="text-align:center;padding:20px">No paths watched</td></tr>';
     return;
   }
 
   tbody.innerHTML = positions.slice(0,8).map(p => {
     return `<tr>
-      <td class="mono dim">${fmtAddr(p.address)}</td>
-      <td class="cyan">${p.symbol}</td>
-      <td class="amber mono" style="font-size:10px">${fmtAddr(p.univ3Pool)}</td>
-      <td class="green mono" style="font-size:10px">${fmtAddr(p.camelotPool)}</td>
+      <td class="cyan">${p.type.toUpperCase()}</td>
+      <td class="amber mono" style="font-size:11px">${p.symbol}</td>
+      <td class="green mono" style="font-size:10px">${p.dexes.join(' → ')}</td>
     </tr>`;
   }).join('');
 }

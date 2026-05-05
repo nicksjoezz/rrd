@@ -304,8 +304,8 @@ input:checked + .toggle-slider::before { transform: translateX(18px); background
   <!-- Sidebar -->
   <nav id="sidebar">
     <div class="sidebar-logo">
-      <span class="logo-mark">⬡ ARBBOT</span>
-      <span class="logo-sub">Arbitrum Arbitrage Bot</span>
+      <span class="logo-mark">⬡ SENTINEL</span>
+      <span class="logo-sub">Arbitrum Arbitrage HUD</span>
     </div>
 
     <!-- Bot toggle -->
@@ -373,11 +373,11 @@ input:checked + .toggle-slider::before { transform: translateX(18px); background
             <div class="lbl">TOTAL PROFIT</div>
           </div>
           <div class="metric-chip">
-            <div class="val" id="top-liqs">0</div>
+            <div class="val" id="top-arbs">0</div>
             <div class="lbl">ARBITRAGES</div>
           </div>
           <div class="metric-chip">
-            <div class="val" id="top-borrowers">0</div>
+            <div class="val" id="top-watchlist">0</div>
             <div class="lbl">WATCHLIST</div>
           </div>
         </div>
@@ -412,8 +412,8 @@ let _currentMode = 'simulate';
 socket.on('stats', function(d){
   const fmt = n => n>=1000?'$'+(n/1000).toFixed(1)+'k':'$'+n.toFixed(2);
   setEl('top-profit',    fmt(d.total_profit_est_usd||0));
-  setEl('top-liqs',      d.total_liquidations||0);
-  setEl('top-borrowers', fmtNum(d.total_borrowers||0));
+  setEl('top-arbs',      d.total_arbs||0);
+  setEl('top-watchlist', fmtNum(d.watchlist_count||0));
   if(typeof onStats==='function') onStats(d);
 });
 

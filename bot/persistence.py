@@ -1,63 +1,56 @@
 import json
 import time
 from pathlib import Path
-from .utils import ROOT_DIR, logger
+from .utils import ROOT_DIR
 
-HISTORY_PATH = ROOT_DIR / "logs" / "history.json"
+LOGS_DIR = ROOT_DIR / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
 
-class HistoryStore:
-    def __init__(self):
-        self._ensure_exists()
+WATCHLIST_PATH = LOGS_DIR / "watchlist.json"
+HISTORY_PATH = LOGS_DIR / "history.json"
+STATS_PATH = LOGS_DIR / "stats.json"
 
-    def _ensure_exists(self):
-        HISTORY_PATH.parent.mkdir(exist_ok=True)
-        if not HISTORY_PATH.exists():
-            with open(HISTORY_PATH, "w") as f:
-                json.dump([], f)
+def _load_json(path, default):
+    if not path.exists(): return default
+    try:
+        with open(path, "r") as f: return json.load(f)
+    except: return default
+
+def _save_json(path, data):
+    with open(path, "w") as f: json.dump(data, f, indent=2)
+
+class HistoryManager:
+    def get_stats(self, watchlist_count):
+        h = _load_json(HISTORY_PATH, [])
+        total_profit = sum(float(r.get("estimated_profit", 0)) for r in h)
+
+        # Today's stats
+        now = time.time()
+        today_start = now - (now % 86400)
+        today_h = [r for r in h if r.get("timestamp", 0) >= today_start]
+        today_profit = sum(float(r.get("estimated_profit", 0)) for r in today_h)
+
+        max_gap = 0
+        if h:
+            try:
+                # Include gap if it exists (from simulations)
+                max_gap = max(float(r.get("gap", 0)) for r in h)
+            except:
+                pass
+
+        return {
+            "total_profit_est_usd": total_profit,
+            "today_profit_est_usd": today_profit,
+            "total_arbs": len(h),
+            "today_arbs": len(today_h),
+            "watchlist_count": watchlist_count,
+            "max_gap": f"{max_gap:.2%}" if max_gap > 0 else "0.00%",
+            "recent": h[::-1][:10]
+        }
 
     def record_execution(self, record):
-        try:
-            with open(HISTORY_PATH, "r") as f:
-                data = json.load(f)
-            data.append(record)
-            # Keep last 100 records
-            data = data[-100:]
-            with open(HISTORY_PATH, "w") as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            logger.error(f"Failed to record history: {e}")
+        h = _load_json(HISTORY_PATH, [])
+        h.append(record)
+        _save_json(HISTORY_PATH, h[-100:])
 
-    def get_stats(self, watchlist_count):
-        try:
-            with open(HISTORY_PATH, "r") as f:
-                data = json.load(f)
-
-            total_profit = sum(float(r.get("estimated_profit", 0)) for r in data)
-            total_liqs = len(data)
-
-            # Filter today's profit
-            now = time.time()
-            today_start = now - (now % 86400)
-            today_records = [r for r in data if r.get("timestamp", 0) >= today_start]
-            today_profit = sum(float(r.get("estimated_profit", 0)) for r in today_records)
-            today_liqs = len(today_records)
-
-            return {
-                "total_profit_est_usd": total_profit,
-                "today_profit_est_usd": today_profit,
-                "total_liquidations": total_liqs,
-                "today_liquidations": today_liqs,
-                "total_borrowers": watchlist_count, # Using for watchlist size
-                "zombie_count": "0.00%", # Placeholder for max gap
-                "recent": data[::-1][:10]
-            }
-        except Exception as e:
-            logger.error(f"Failed to get stats: {e}")
-            return {
-                "total_profit_est_usd": 0, "today_profit_est_usd": 0,
-                "total_liquidations": 0, "today_liquidations": 0,
-                "total_borrowers": watchlist_count, "zombie_count": "0.00%",
-                "recent": []
-            }
-
-history = HistoryStore()
+history = HistoryManager()

@@ -124,6 +124,7 @@ function parseLogLine(raw) {
 }
 
 function addLine(rawLine) {
+  if (!rawLine) return;
   const term   = document.getElementById('terminal');
   const cursor = term.querySelector('.log-cursor');
 
@@ -131,10 +132,10 @@ function addLine(rawLine) {
   const cls = classifyLine(rawLine);
 
   const span = document.createElement('span');
-  span.className = `log-line ${cls}`;
+  span.className = "log-line " + cls;
 
   if (ts) {
-    span.innerHTML = `<span class="log-timestamp">${ts}</span><span class="log-level">[${level}]</span>${escHtml(msg)}`;
+    span.innerHTML = '<span class="log-timestamp">' + ts + '</span><span class="log-level">[' + level + ']</span>' + escHtml(msg);
   } else {
     span.textContent = rawLine.trim();
   }
@@ -159,23 +160,29 @@ function escHtml(str) {
 function onLogLine(line) {
   addLine(line);
 }
-socket.on('log_line', line => addLine(line));
+
+// Global socket listener
+socket.on('log_line', function(data) {
+    if (data && data.line) {
+        addLine(data.line);
+    }
+});
 
 async function startBot() {
   const r = await fetch('/api/bot/start', { method:'POST' });
   const d = await r.json();
   if (d.ok) {
-    addLine(`[INFO] Bot started (PID ${d.pid})`);
+    addLine("[INFO] Bot started (PID " + d.pid + ")");
     botStartTime = Date.now();
   } else {
-    addLine(`[ERROR] ${d.msg}`);
+    addLine("[ERROR] " + d.msg);
   }
 }
 
 async function stopBot() {
   const r = await fetch('/api/bot/stop', { method:'POST' });
   const d = await r.json();
-  addLine(d.ok ? '[INFO] Bot stopped.' : `[ERROR] ${d.msg}`);
+  addLine(d.ok ? '[INFO] Bot stopped.' : "[ERROR] " + d.msg);
   botStartTime = null;
 }
 
@@ -193,7 +200,7 @@ setInterval(() => {
   if (!botStartTime) return;
   const s = Math.floor((Date.now() - botStartTime) / 1000);
   const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), ss = s%60;
-  setEl('bot-uptime', `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`);
+  setEl('bot-uptime', String(h).padStart(2,'0') + ":" + String(m).padStart(2,'0') + ":" + String(ss).padStart(2,'0'));
 }, 1000);
 
 socket.on('bot_status', d => {
