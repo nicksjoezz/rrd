@@ -140,7 +140,7 @@
     <div class="mode-label">Execution Mode</div>
     <div class="mode-status simulate" id="mode-status-text">SIMULATE</div>
     <div class="mode-desc simulate" id="mode-desc-text">
-      Positions are scanned and ranked — liquidations run via eth_call only. No gas spent. No real transactions sent.
+      Paths are scanned and gaps calculated — arbitrage simulations run via eth_call only. No gas spent. No real transactions sent.
     </div>
   </div>
 
@@ -190,15 +190,11 @@
         <div style="font-size:9px;color:var(--text-lo);margin-top:5px">Stored locally. Never transmitted. Masked in UI.</div>
       </div>
       <div class="field">
-        <label class="field-label">Liquidator Contract Address</label>
-        <input type="text" id="cfg-contract" placeholder="Deploy FlashLoanLiquidator.sol first">
+        <label class="field-label">Arbitrage Contract Address</label>
+        <input type="text" id="cfg-contract" placeholder="Deploy FlashLoanArbitrage.sol first">
       </div>
     </div>
 
-    <div class="settings-section">
-      <div class="section-title">Protocols</div>
-      <div id="protocols-list"></div>
-    </div>
 
     <div class="settings-section">
       <div class="section-title">Notifications (optional)</div>
@@ -225,26 +221,14 @@
     <div class="settings-section">
       <div class="section-title">Strategy</div>
       <div class="field">
-        <label class="field-label">Min Profit USD — <span id="lbl-min-profit" style="color:var(--green)">$20</span></label>
-        <input type="range" class="range-input" id="cfg-min-profit" min="5" max="500" step="5"
+        <label class="field-label">Min Profit USD — <span id="lbl-min-profit" style="color:var(--green)">$1</span></label>
+        <input type="range" class="range-input" id="cfg-min-profit" min="1" max="100" step="1"
           oninput="document.getElementById('lbl-min-profit').textContent='$'+this.value">
       </div>
       <div class="field">
-        <label class="field-label">Min Debt USD — <span id="lbl-min-debt" style="color:var(--green)">$300</span></label>
-        <input type="range" class="range-input" id="cfg-min-debt" min="50" max="10000" step="50"
-          oninput="document.getElementById('lbl-min-debt').textContent='$'+this.value">
-      </div>
-      <div class="field">
-        <label class="field-label">Zombie Queue Entry HF — <span id="lbl-zombie" style="color:var(--green)">1.05</span></label>
-        <input type="range" class="range-input" id="cfg-zombie-hf" min="1.0" max="1.2" step="0.01"
-          oninput="document.getElementById('lbl-zombie').textContent=parseFloat(this.value).toFixed(2)">
-      </div>
-      <div class="flex items-center" style="gap:12px;margin-bottom:14px">
-        <label class="toggle">
-          <input type="checkbox" id="cfg-high-bonus" checked>
-          <span class="toggle-slider"></span>
-        </label>
-        <span style="font-size:11px;color:var(--text-dim)">Prioritize high-bonus assets (ARB, GMX, LINK)</span>
+        <label class="field-label">Max Gas USD — <span id="lbl-max-gas" style="color:var(--green)">$5</span></label>
+        <input type="range" class="range-input" id="cfg-max-gas" min="1" max="50" step="1"
+          oninput="document.getElementById('lbl-max-gas').textContent='$'+this.value">
       </div>
     </div>
 
@@ -282,10 +266,6 @@
       </div>
     </div>
 
-    <div class="settings-section">
-      <div class="section-title">Token Liquidation Bonuses</div>
-      <div id="token-list" style="max-height:200px;overflow-y:auto;padding-right:4px"></div>
-    </div>
   </div>
 </div>
 
@@ -326,7 +306,7 @@ function applyMode(mode) {
     descTxt.textContent = 'LIVE — real transactions are sent on-chain. Profits go to your contract.';
     thumb.textContent = '🔴';
   } else {
-    descTxt.textContent = 'SIMULATE — liquidations run via eth_call only. No gas. No real transactions.';
+    descTxt.textContent = 'SIMULATE — arbitrage simulations run via eth_call only. No gas. No real transactions.';
     thumb.textContent = '⬡';
   }
 }
@@ -378,19 +358,13 @@ function populateForm(c) {
   setVal('cfg-rpc-http',    net.rpc_http || '');
   setVal('cfg-rpc-ws',      net.rpc_ws   || '');
   setVal('cfg-private-key', wal.private_key || '');
-  setVal('cfg-contract',    wal.liquidator_contract || '');
+  setVal('cfg-contract',    wal.arb_contract || '');
 
-  setRange('cfg-min-profit', str.min_profit_usd || 20);
-  document.getElementById('lbl-min-profit').textContent = '$' + (str.min_profit_usd || 20);
+  setRange('cfg-min-profit', str.min_profit_usd || 1);
+  document.getElementById('lbl-min-profit').textContent = '$' + (str.min_profit_usd || 1);
 
-  setRange('cfg-min-debt', str.min_debt_usd || 300);
-  document.getElementById('lbl-min-debt').textContent = '$' + (str.min_debt_usd || 300);
-
-  const zq = str.zombie_queue || {};
-  setRange('cfg-zombie-hf', zq.entry_hf || 1.05);
-  document.getElementById('lbl-zombie').textContent = (zq.entry_hf || 1.05).toFixed(2);
-
-  document.getElementById('cfg-high-bonus').checked = str.prioritize_high_bonus !== false;
+  setRange('cfg-max-gas', str.max_gas_usd || 5);
+  document.getElementById('lbl-max-gas').textContent = '$' + (str.max_gas_usd || 5);
 
   setRange('cfg-gas-max',  gas.max_fee_per_gas_gwei || 1.0);
   document.getElementById('lbl-gas').textContent = (gas.max_fee_per_gas_gwei || 1.0).toFixed(1);
@@ -406,28 +380,7 @@ function populateForm(c) {
   setVal('cfg-tg-token', not.telegram_bot_token || '');
   setVal('cfg-tg-chat',  not.telegram_chat_id   || '');
 
-  // Protocols
-  const pl = document.getElementById('protocols-list');
-  pl.innerHTML = Object.entries(c.protocols || {}).map(([name, p]) => `
-    <div class="protocol-toggle">
-      <div>
-        <div class="proto-name">${name.toUpperCase()}</div>
-        <div class="proto-addr">${(p.pool||'').slice(0,20)}…</div>
-      </div>
-      <label class="toggle">
-        <input type="checkbox" id="proto-${name}" ${p.enabled ? 'checked' : ''}>
-        <span class="toggle-slider"></span>
-      </label>
-    </div>`).join('');
 
-  // Tokens
-  const tl = document.getElementById('token-list');
-  tl.innerHTML = Object.entries(c.tokens || {}).map(([sym, t]) => `
-    <div class="token-row">
-      <div class="token-sym">${sym}</div>
-      <div style="flex:1;font-size:9px;color:var(--text-lo)">${(t.address||'').slice(0,12)}…</div>
-      <div style="font-family:var(--font-hud);font-size:10px;color:var(--green)">${((t.liquidation_bonus||0)*100).toFixed(0)}%</div>
-    </div>`).join('');
 }
 
 async function saveAll() {
@@ -438,15 +391,12 @@ async function saveAll() {
   updated.network.rpc_ws   = document.getElementById('cfg-rpc-ws').value;
 
   updated.wallet = updated.wallet || {};
-  updated.wallet.private_key          = document.getElementById('cfg-private-key').value;
-  updated.wallet.liquidator_contract  = document.getElementById('cfg-contract').value;
+  updated.wallet.private_key  = document.getElementById('cfg-private-key').value;
+  updated.wallet.arb_contract = document.getElementById('cfg-contract').value;
 
   updated.strategy = updated.strategy || {};
   updated.strategy.min_profit_usd     = parseFloat(document.getElementById('cfg-min-profit').value);
-  updated.strategy.min_debt_usd       = parseFloat(document.getElementById('cfg-min-debt').value);
-  updated.strategy.zombie_queue       = updated.strategy.zombie_queue || {};
-  updated.strategy.zombie_queue.entry_hf = parseFloat(document.getElementById('cfg-zombie-hf').value);
-  updated.strategy.prioritize_high_bonus = document.getElementById('cfg-high-bonus').checked;
+  updated.strategy.max_gas_usd        = parseFloat(document.getElementById('cfg-max-gas').value);
 
   updated.gas = updated.gas || {};
   updated.gas.max_fee_per_gas_gwei   = parseFloat(document.getElementById('cfg-gas-max').value);
@@ -464,10 +414,6 @@ async function saveAll() {
   updated.notifications.telegram_bot_token   = document.getElementById('cfg-tg-token').value;
   updated.notifications.telegram_chat_id     = document.getElementById('cfg-tg-chat').value;
 
-  Object.keys(updated.protocols || {}).forEach(name => {
-    const el = document.getElementById('proto-' + name);
-    if (el) updated.protocols[name].enabled = el.checked;
-  });
 
   const r = await fetch('/api/config', {
     method: 'POST',

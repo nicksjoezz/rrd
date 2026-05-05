@@ -144,7 +144,7 @@
   <div class="stat-block">
     <div class="stat-label">Contract Profit Balance</div>
     <div class="stat-value" id="total-profit-bal" style="font-size:22px">—</div>
-    <div class="stat-sub">Accumulated in FlashLoanLiquidator.sol</div>
+    <div class="stat-sub">Accumulated in FlashLoanArbitrage.sol</div>
   </div>
 </div>
 
@@ -369,7 +369,7 @@ async function runHealthCheck() {
 
   // Show placeholder loading items
   checkList.innerHTML = [
-    'Config', 'RPC Connection', 'Wallet Balance', 'Liquidator Contract',
+    'Config', 'RPC Connection', 'Wallet Balance', 'Arbitrage Contract',
     'Protocols', 'Balancer Vault', 'Oracle Feeds', 'Uniswap Quoter'
   ].map(name => checkRow({status:'loading', name, detail:'checking…'})).join('');
 

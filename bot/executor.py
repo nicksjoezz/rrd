@@ -119,23 +119,9 @@ class ArbExecutor:
     async def execute(self, opportunity: dict):
         mode = get_mode()
 
-        # If no contract/account, handle as math-only simulation in simulate mode
         if not self._contract or not self._account:
-            if mode == "simulate":
-                logger.info(f"[SIMULATE] Math-only Arb | {opportunity['symbol']} Gap: {opportunity['gap']:.2%}")
-                record_execution({
-                    "tx_hash": f"math-sim-{int(time.time())}-{opportunity['symbol']}",
-                    "token": opportunity["tokens"][0],
-                    "symbol": opportunity["symbol"],
-                    "type": opportunity.get("type", "dual"),
-                    "gap": opportunity["gap"],
-                    "estimated_profit": opportunity['gap'] * 100, # Mock profit for UI
-                    "timestamp": int(time.time())
-                })
-                return "math-sim-success"
-            else:
-                logger.warning(f"[LIVE] Cannot execute {opportunity['symbol']}: arb_contract or private_key not set.")
-                return None
+            logger.warning(f"[{mode.upper()}] Cannot execute {opportunity['symbol']}: arb_contract or private_key not set.")
+            return None
 
         token_flash = opportunity["tokens"][0].lower()
         usdc = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831".lower()
@@ -167,7 +153,8 @@ class ArbExecutor:
                     "token": opportunity["tokens"][0],
                     "symbol": opportunity["symbol"],
                     "type": opportunity.get("type", "dual"),
-                    "estimated_profit": opportunity['gap'] * (amount_flash / 10**18 if "ETH" in opportunity['symbol'] else amount_flash / 10**6),
+                    "gap": opportunity["gap"],
+                    "estimated_profit": opportunity['gap'] * (amount_flash / 10**18 if "ETH" in opportunity['symbol'].upper() else amount_flash / 10**6),
                     "timestamp": int(time.time())
                 })
                 return "sim-success"
@@ -180,7 +167,8 @@ class ArbExecutor:
                     "token": opportunity["tokens"][0],
                     "symbol": opportunity["symbol"],
                     "type": opportunity.get("type", "dual"),
-                    "estimated_profit": opportunity['gap'] * (amount_flash / 10**18 if "ETH" in opportunity['symbol'] else amount_flash / 10**6),
+                    "gap": opportunity["gap"],
+                    "estimated_profit": opportunity['gap'] * (amount_flash / 10**18 if "ETH" in opportunity['symbol'].upper() else amount_flash / 10**6),
                     "timestamp": int(time.time())
                 })
                 return tx_hash.hex()

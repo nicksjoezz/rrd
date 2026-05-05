@@ -33,6 +33,7 @@ class HistoryManager:
         max_gap = 0
         if h:
             try:
+                # Include gap if it exists (from simulations)
                 max_gap = max(float(r.get("gap", 0)) for r in h)
             except:
                 pass
@@ -40,10 +41,10 @@ class HistoryManager:
         return {
             "total_profit_est_usd": total_profit,
             "today_profit_est_usd": today_profit,
-            "total_liquidations": len(h),
-            "today_liquidations": len(today_h),
-            "total_borrowers": watchlist_count, # Overloaded for "Paths Watched"
-            "zombie_count": f"{max_gap:.2%}",
+            "total_arbs": len(h),
+            "today_arbs": len(today_h),
+            "watchlist_count": watchlist_count,
+            "max_gap": f"{max_gap:.2%}" if max_gap > 0 else "0.00%",
             "recent": h[::-1][:10]
         }
 
