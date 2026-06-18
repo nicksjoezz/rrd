@@ -41,19 +41,19 @@
     <div class="stat-sub" id="d-today-profit" style="color:var(--green)">Today: $0.00</div>
   </div>
   <div class="stat-block animate-in">
-    <div class="stat-label">Liquidations</div>
+    <div class="stat-label">Arbitrages Executed</div>
     <div class="stat-value" id="d-total-liqs">0</div>
     <div class="stat-sub" id="d-today-liqs">Today: 0</div>
   </div>
   <div class="stat-block animate-in">
-    <div class="stat-label">Borrowers Tracked</div>
+    <div class="stat-label">Tokens Watched</div>
     <div class="stat-value" id="d-borrowers">0</div>
-    <div class="stat-sub">Across all protocols</div>
+    <div class="stat-sub">Arb-Ready Tokens</div>
   </div>
   <div class="stat-block animate-in">
-    <div class="stat-label">Watching (Zombie)</div>
+    <div class="stat-label">Max Gap Found</div>
     <div class="stat-value" id="d-zombie">—</div>
-    <div class="stat-sub">HF 0.95 – 1.05</div>
+    <div class="stat-sub">Current Opportunity</div>
   </div>
 </div>
 
@@ -69,21 +69,21 @@
     </div>
   </div>
 
-  <!-- Approaching positions -->
+  <!-- Watchlist tokens -->
   <div class="card">
     <div class="card-header">
-      <div class="card-title"><span class="dot"></span> Approaching Liquidation</div>
-      <a href="/positions" class="btn btn-sm" style="text-decoration:none">VIEW ALL →</a>
+      <div class="card-title"><span class="dot"></span> Watchlist Tokens</div>
+      <a href="/positions" class="btn btn-sm" style="text-decoration:none">WATCHLIST →</a>
     </div>
     <div class="card-body" style="padding:0">
     <div class="table-responsive">
       <table class="data-table" id="approaching-tbl">
         <thead>
           <tr>
-            <th>ADDRESS</th>
-            <th>PROTOCOL</th>
-            <th>HEALTH</th>
-            <th>DEBT</th>
+            <th>TOKEN</th>
+            <th>SYMBOL</th>
+            <th>UNIV3 POOL</th>
+            <th>CAMELOT POOL</th>
           </tr>
         </thead>
         <tbody id="approaching-body">
@@ -97,7 +97,7 @@
 <!-- Recent liquidations -->
 <div class="card animate-in">
   <div class="card-header">
-    <div class="card-title"><span class="dot"></span> Recent Liquidations</div>
+    <div class="card-title"><span class="dot"></span> Recent Arbitrages</div>
     <span class="live-tag">LIVE</span>
   </div>
   <div class="card-body" style="padding:0">
@@ -105,12 +105,12 @@
       <table class="data-table" id="recent-tbl">
       <thead>
         <tr>
-          <th>TIME</th><th>BORROWER</th><th>PROTOCOL</th>
-          <th>COLLATERAL</th><th>DEBT USD</th><th>EST. PROFIT</th><th>TX</th>
+          <th>TIME</th><th>TOKEN</th><th>SYMBOL</th>
+          <th>UNI POOL</th><th>CAMELOT</th><th>EST. PROFIT</th><th>TX</th>
         </tr>
       </thead>
       <tbody id="recent-body">
-        <tr><td colspan="7" class="dim" style="text-align:center;padding:24px">No liquidations yet</td></tr>
+        <tr><td colspan="7" class="dim" style="text-align:center;padding:24px">No arbitrages yet</td></tr>
       </tbody>
     </table>
     </div>
@@ -143,10 +143,10 @@ function onStats(d) {
       const simBadge = isSim ? '<span class="sim-tag">[SIM]</span> ' : '';
       return `<tr class="${isSim ? 'sim-row' : ''}">
         <td class="dim">${ts}</td>
-        <td class="mono cyan">${fmtAddr(r.borrower)}</td>
-        <td><span class="badge badge-cyan">${r.protocol||'—'}</span></td>
-        <td class="amber">${(r.collateral_token||'').slice(0,8)}</td>
-        <td>${fmtUSD(r.debt_covered_usd)}</td>
+        <td class="mono cyan">${fmtAddr(r.token)}</td>
+        <td class="amber">${r.symbol}</td>
+        <td class="mono dim">${fmtAddr(r.univ3Pool)}</td>
+        <td class="mono dim">${fmtAddr(r.camelotPool)}</td>
         <td class="${pColor}">${simBadge}${fmtUSD(profit)}</td>
         <td class="dim" style="font-size:9px">${tx}</td>
       </tr>`;
@@ -158,25 +158,16 @@ function onPositions(positions) {
   const tbody = document.getElementById('approaching-body');
 
   if (!positions.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="dim" style="text-align:center;padding:20px">Market healthy</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" class="dim" style="text-align:center;padding:20px">No tokens watched</td></tr>';
     return;
   }
 
   tbody.innerHTML = positions.slice(0,8).map(p => {
-    const hf = parseFloat(p.health_factor) || 0;
-    const pct = Math.min(hf / 1.2 * 100, 100);
-    const cls = hf < 1.0 ? 'crit' : hf < 1.05 ? 'warn' : 'ok';
-    const col = hf < 1.0 ? 'red' : hf < 1.05 ? 'amber' : 'text';
     return `<tr>
       <td class="mono dim">${fmtAddr(p.address)}</td>
-      <td><span class="badge badge-cyan" style="font-size:8px">${p.protocol||'—'}</span></td>
-      <td>
-        <div class="hf-bar-wrap">
-          <div class="hf-bar"><div class="hf-fill ${cls}" style="width:${pct}%"></div></div>
-          <span class="${col}" style="font-size:10px;font-family:var(--font-hud)">${hf.toFixed(4)}</span>
-        </div>
-      </td>
-      <td class="green" style="font-size:10px">${fmtUSD(p.total_debt_usd)}</td>
+      <td class="cyan">${p.symbol}</td>
+      <td class="amber mono" style="font-size:10px">${fmtAddr(p.univ3Pool)}</td>
+      <td class="green mono" style="font-size:10px">${fmtAddr(p.camelotPool)}</td>
     </tr>`;
   }).join('');
 }

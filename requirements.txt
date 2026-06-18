@@ -7,5 +7,7 @@ python-socketio==5.11.2
 gevent==24.2.1
 gevent-websocket==0.10.1
 requests==2.31.0
+httpx==0.28.1
+websockets==14.2
 aiohttp==3.9.3
 colorlog==6.8.2

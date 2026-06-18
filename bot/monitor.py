@@ -1,648 +1,225 @@
-"""
-monitor.py -- Scans multiple lending protocols for liquidatable positions.
-
-Protocols supported (configured in config.json):
-  - Aave V3 (Arbitrum)
-  - Radiant Capital (Aave-fork)
-  - Easily extendable to any Aave-compatible protocol
-
-Edge advantages:
-  1. Multi-protocol — most bots only watch Aave
-  2. No minimum size filter — small positions on Arbitrum are profitable
-  3. Long-tail asset detection (ARB, GMX, LINK with 10–15% bonus)
-  4. Zombie queue integration for HF 0.95-1.15 pre-queuing
-"""
-
-import logging
+import asyncio
+import json
 import time
-from typing import List, Optional
+import logging
+from typing import List, Dict, Set
 from web3 import Web3
-
 from .utils import (
-    get_web3, get_public_web3, get_alchemy_web3,
-    cfg, get_token_map, checksum,
-    wei_to_usd_base, health_factor_float,
-    AAVE_POOL_ABI, DATA_PROVIDER_ABI,
-    logger, notify,
-    MULTICALL3_ADDR, MULTICALL3_ABI
+    get_web3, cfg, checksum,
+    MULTICALL3_ADDR, MULTICALL3_ABI, logger, ROOT_DIR
 )
-from .swap_router import get_best_swap
 
+WATCHLIST_PATH = ROOT_DIR / "logs" / "watchlist.json"
 
-from .database import (
-    upsert_borrowers, get_borrowers, upsert_position,
-    get_last_scan_block, set_last_scan_block, remove_position
-)
-from .velocity import VelocityTracker
-from .zombie_queue import ZombieQueue
+# ABIs
+UNIV3_POOL_ABI = json.loads('[{"inputs":[],"name":"slot0","outputs":[{"internalType":"uint160","name":"sqrtPriceX96","type":"uint160"},{"internalType":"int24","name":"tick","type":"int24"},{"internalType":"uint16","name":"observationIndex","type":"uint16"},{"internalType":"uint16","name":"observationLength","type":"uint16"},{"internalType":"uint16","name":"observationLengthNext","type":"uint16"},{"internalType":"uint8","name":"feeProtocol","type":"uint8"},{"internalType":"bool","name":"unlocked","type":"bool"}],"stateMutability":"view","type":"function"}]')
+CAMELOT_POOL_ABI = json.loads('[{"inputs":[],"name":"getReserves","outputs":[{"internalType":"uint112","name":"reserve0","type":"uint112"},{"internalType":"uint112","name":"reserve1","type":"uint112"},{"internalType":"uint32","name":"blockTimestampLast","type":"uint32"}],"stateMutability":"view","type":"function"}]')
+ERC20_ABI = json.loads('[{"inputs":[],"name":"decimals","outputs":[{"internalType":"uint8","name":"","type":"uint8"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"token0","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},{"inputs":[],"name":"token1","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"}]')
 
-logger = logging.getLogger("liquidation_bot.monitor")
+class ArbMonitor:
+    def __init__(self, on_opportunity=None):
+        self.on_opportunity = on_opportunity
+        self.watchlist = []
+        self.metadata = {} # pool_addr -> {token0, token1, dec0, dec1, is_token1_quote}
+        self.watched_pools: Set[str] = set()
+        self.w3 = get_web3()
+        self._load_watchlist()
 
-
-class ProtocolMonitor:
-    """
-    Monitors a single Aave-compatible lending protocol.
-    Reusable for Aave, Radiant, Silo, etc.
-    """
-
-    def __init__(self, name: str, pool_addr: str, data_provider_addr: str, borrow_topic: str):
-        self.name               = name
-        self.pool_addr          = pool_addr
-        self.data_provider_addr  = data_provider_addr
-        self.borrow_topic        = borrow_topic
-        self._borrowers: set   = set()
-        self._last_scan_block  = 0
-
-        w3 = get_web3()
-        self._w3 = w3
-        self.pool = w3.eth.contract(
-            address=checksum(pool_addr),
-            abi=AAVE_POOL_ABI
-        )
-        self.data_provider = w3.eth.contract(
-            address=checksum(data_provider_addr),
-            abi=DATA_PROVIDER_ABI
-        ) if data_provider_addr else None
-
-        self.reserve_configs = {}
-        self._refresh_reserve_configs()
-
-    def load_borrowers_from_db(self):
-        """Load previously scanned borrowers from SQLite (fast restart)."""
-        cached = get_borrowers(self.name)
-        self._borrowers.update(cached)
-        if cached:
-            logger.info(f"[{self.name}] Loaded {len(cached):,} cached borrowers from DB")
-
-    def load_borrowers_from_events(self, from_block: int, to_block: int, on_batch_found=None):
-        """
-        Scan Borrow event logs using raw eth_getLogs — NOT the web3 event helper.
-        """
-        w3    = get_public_web3()
-        chunk = cfg("scanning", "event_scan_chunk")
-        # Use protocol-specific topic0
-        new_borrowers = set()
-
-        total_reqs = (to_block - from_block) // chunk + 1
-        logger.info(f"[{self.name}] Discovery scan: {from_block:,} -> {to_block:,} ({total_reqs} chunks)")
-
-        for i, start in enumerate(range(from_block, to_block, chunk), 1):
-            end = min(start + chunk - 1, to_block)
+    def _load_watchlist(self):
+        if WATCHLIST_PATH.exists():
             try:
-                if i % 50 == 0 or i == 1 or i == total_reqs:
-                    pct = (i / total_reqs) * 100
-                    logger.info(f"[{self.name}] Progress: {pct:.1f}%  |  Borrowers found: {len(new_borrowers)}")
+                with open(WATCHLIST_PATH, "r") as f:
+                    new_watchlist = json.load(f)
+                    if new_watchlist != self.watchlist:
+                        self.watchlist = new_watchlist
+                        self._update_watched_pools()
+                        self._fetch_metadata()
+            except Exception as e:
+                logger.error(f"Error loading watchlist: {e}")
 
-                logs = w3.eth.get_logs({
-                    "address":   w3.to_checksum_address(self.pool_addr),
-                    "topics":    [self.borrow_topic],
-                    "fromBlock": start,
-                    "toBlock":   end,
-                })
-                batch_found = []
-                for log in logs:
-                    topics = log.get("topics", [])
-                    if len(topics) >= 3:
-                        raw = topics[2]
-                        # Extract address from topic (last 20 bytes / 40 chars)
-                        addr_hex = raw.hex() if isinstance(raw, bytes) else str(raw)
-                        addr     = "0x" + addr_hex[-40:]
-                        try:
-                            caddr = w3.to_checksum_address(addr)
-                            if caddr not in self._borrowers and caddr not in new_borrowers:
-                                batch_found.append(caddr)
-                                new_borrowers.add(caddr)
-                        except Exception:
-                            pass
-                
-                # Streaming verification: if we found new borrowers, trigger callback
-                if on_batch_found and batch_found:
-                    on_batch_found(self.name, batch_found)
+    def _update_watched_pools(self):
+        self.watched_pools = set()
+        for item in self.watchlist:
+            self.watched_pools.add(item["univ3Pool"].lower())
+            self.watched_pools.add(item["camelotPool"].lower())
 
-            except Exception as ex:
-                logger.debug(f"[{self.name}] Log chunk {start}-{end}: {ex}")
-                time.sleep(0.5)
+    def _fetch_metadata(self):
+        """Fetch tokens and decimals for all pools in watchlist."""
+        usdc_native = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831".lower()
+        usdc_bridged = "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8".lower()
+        weth = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1".lower()
+        quotes = [usdc_native, usdc_bridged, weth]
 
-        added = len(new_borrowers - self._borrowers)
-        self._borrowers.update(new_borrowers)
-        
-        # Always update the scan state so we don't re-scan the same range
-        set_last_scan_block(self.name, to_block)
-        
-        if new_borrowers:
-            upsert_borrowers(list(new_borrowers), self.name)
-            
-        if added:
-            logger.info(f"[{self.name}] +{added} new borrowers (total: {len(self._borrowers):,})")
+        for p in self.watchlist:
+            u_addr = p["univ3Pool"]
+            c_addr = p["camelotPool"]
 
-    def _refresh_reserve_configs(self):
-        """Fetch and cache decimals and liquidation thresholds for ALL protocol reserves."""
-        if not self.data_provider: return
+            if u_addr not in self.metadata or c_addr not in self.metadata:
+                try:
+                    u_pool = self.w3.eth.contract(address=checksum(u_addr), abi=ERC20_ABI)
+                    u_t0 = u_pool.functions.token0().call().lower()
+                    u_t1 = u_pool.functions.token1().call().lower()
+
+                    c_pool = self.w3.eth.contract(address=checksum(c_addr), abi=ERC20_ABI)
+                    c_t0 = c_pool.functions.token0().call().lower()
+                    c_t1 = c_pool.functions.token1().call().lower()
+
+                    token_decimals = {}
+                    for t in set([u_t0, u_t1, c_t0, c_t1]):
+                        erc20 = self.w3.eth.contract(address=checksum(t), abi=ERC20_ABI)
+                        token_decimals[t] = erc20.functions.decimals().call()
+
+                    self.metadata[u_addr] = {
+                        "token0": u_t0, "token1": u_t1,
+                        "dec0": token_decimals.get(u_t0, 18), "dec1": token_decimals.get(u_t1, 18),
+                        "is_token1_quote": u_t1 in quotes
+                    }
+                    self.metadata[c_addr] = {
+                        "token0": c_t0, "token1": c_t1,
+                        "dec0": token_decimals.get(c_t0, 18), "dec1": token_decimals.get(c_t1, 18),
+                        "is_token1_quote": c_t1 in quotes
+                    }
+                except Exception as e:
+                    logger.error(f"Metadata fetch failed for {p['symbol']}: {e}")
+
+    def check_all_prices_multicall(self):
+        """Fetch prices for all tokens in watchlist using Multicall3 tryAggregate."""
+        if not self.watchlist: return []
+
+        opportunities = []
+        # tryAggregate(bool requireSuccess, (address target, bytes callData)[] calls)
+        MC3_ABI = json.loads('[{"inputs":[{"internalType":"bool","name":"requireSuccess","type":"bool"},{"components":[{"internalType":"address","name":"target","type":"address"},{"internalType":"bytes","name":"callData","type":"bytes"}],"internalType":"struct Multicall3.Call[]","name":"calls","type":"tuple[]"}],"name":"tryAggregate","outputs":[{"components":[{"internalType":"bool","name":"success","type":"bool"},{"internalType":"bytes","name":"returnData","type":"bytes"}],"internalType":"struct Multicall3.Result[]","name":"returnData","type":"tuple[]"}],"stateMutability":"payable","type":"function"}]')
+        mc_contract = self.w3.eth.contract(address=checksum(MULTICALL3_ADDR), abi=MC3_ABI)
+
+        calls = []
+        pool_order = []
+
+        for item in self.watchlist:
+            u_addr = item["univ3Pool"]
+            c_addr = item["camelotPool"]
+            if u_addr not in self.metadata or c_addr not in self.metadata: continue
+
+            u_pool = self.w3.eth.contract(address=checksum(u_addr), abi=UNIV3_POOL_ABI)
+            calls.append({"target": checksum(u_addr), "callData": u_pool.encodeABI("slot0")})
+            pool_order.append(("u", u_addr))
+
+            if item.get("isCamelotV3"):
+                calls.append({"target": checksum(c_addr), "callData": "0x3850c7bd"}) # globalState
+            else:
+                c_pool = self.w3.eth.contract(address=checksum(c_addr), abi=CAMELOT_POOL_ABI)
+                calls.append({"target": checksum(c_addr), "callData": c_pool.encodeABI("getReserves")})
+            pool_order.append(("c", c_addr))
+
+        if not calls: return []
 
         try:
-            reserves = self.pool.functions.getReservesList().call()
-            logger.info(f"[{self.name}] Detected {len(reserves)} protocol reserves")
-        except Exception as e:
-            logger.warning(f"[{self.name}] Failed to fetch reserves list: {e}")
-            reserves = [v['address'] for v in cfg("tokens").values()]
+            results = mc_contract.functions.tryAggregate(False, calls).call()
 
-        w3 = self._w3 if hasattr(self, '_w3') else get_web3()
-        from .utils import ERC20_ABI
-
-        for addr in reserves:
-            addr_l = addr.lower()
-            try:
-                # Aave V3 ReserveConfigurationData: [0] decimals, [1] ltv, [2] threshold, [3] bonus...
-                res = self.data_provider.functions.getReserveConfigurationData(checksum(addr)).call()
-
-                # Fetch E-Mode category via bitmask in getConfiguration (Pool)
-                # Aave V3 ReserveConfiguration Bitmask: 168-175 is EMode Category
-                raw_res = self.pool.functions.getConfiguration(checksum(addr)).call()
-                emode_cat = (raw_res[0] >> 168) & 0xFF
-
-                sym = "???"
-                token_map = get_token_map()
-                if addr_l in token_map:
-                    sym = token_map[addr_l]["symbol"]
+            decoded_data = {}
+            for i, (success, res) in enumerate(results):
+                if not success or not res: continue
+                ptype, paddr = pool_order[i]
+                if ptype == "u":
+                    try:
+                        dec = self.w3.codec.decode(["uint160", "int24", "uint16", "uint16", "uint16", "uint8", "bool"], res)
+                        sqrtP = dec[0]
+                        meta = self.metadata[paddr]
+                        price_t0_in_t1 = (sqrtP / (2**96))**2 * (10**meta["dec0"] / 10**meta["dec1"])
+                        decoded_data[paddr] = price_t0_in_t1 if meta["is_token1_quote"] else (1/price_t0_in_t1 if price_t0_in_t1 > 0 else 0)
+                    except: pass
                 else:
                     try:
-                        t = w3.eth.contract(address=checksum(addr), abi=ERC20_ABI)
-                        sym = t.functions.symbol().call()
+                        meta = self.metadata[paddr]
+                        item = next(it for it in self.watchlist if it["camelotPool"] == paddr)
+                        if item.get("isCamelotV3"):
+                            sqrtP = self.w3.codec.decode(["uint160"], res[:32])[0]
+                            price_t0_in_t1 = (sqrtP / (2**96))**2 * (10**meta["dec0"] / 10**meta["dec1"])
+                        else:
+                            dec = self.w3.codec.decode(["uint112", "uint112", "uint32"], res)
+                            res0, res1 = dec[0], dec[1]
+                            price_t0_in_t1 = (res1 / 10**meta["dec1"]) / (res0 / 10**meta["dec0"]) if res0 > 0 else 0
+
+                        decoded_data[paddr] = price_t0_in_t1 if meta["is_token1_quote"] else (1/price_t0_in_t1 if price_t0_in_t1 > 0 else 0)
                     except: pass
 
-                self.reserve_configs[addr_l] = {
-                    "symbol": sym,
-                    "decimals": res[0],
-                    "ltv": res[1] / 10000,
-                    "threshold": res[2] / 10000,
-                    "bonus": (res[3] - 10000) / 10000 if res[3] > 10000 else 0,
-                    "emode_category": emode_cat
-                }
-            except Exception as e:
-                logger.debug(f"[{self.name}] Reserve config fail for {addr[:10]}: {e}")
+            for item in self.watchlist:
+                u_p = decoded_data.get(item["univ3Pool"])
+                c_p = decoded_data.get(item["camelotPool"])
+                if u_p is None or c_p is None or u_p == 0 or c_p == 0: continue
 
-    def _get_best_tokens_and_fresh_hf(self, user: str, force_fresh: bool = False):
-        """
-        Calculates HF using fresh local prices and returns the best
-        collateral/debt tokens for liquidation.
-        Uses Multicall to fetch all reserve data in one batch for high speed.
-        """
-        if not self.data_provider: return None
-        from .profitability import get_token_price_usd
-
-        w3 = self._w3 if hasattr(self, '_w3') else get_web3()
-        mc = w3.eth.contract(address=MULTICALL3_ADDR, abi=MULTICALL3_ABI)
-
-        # ── E-Mode Awareness ──────────────────────────────────────────────────
-        user_emode = 0
-        emode_threshold = None
-        emode_bonus = None
-        try:
-            user_emode = self.pool.functions.getUserEMode(checksum(user)).call()
-            if user_emode > 0:
-                em_data = self.pool.functions.getEModeCategoryData(user_emode).call()
-                if isinstance(em_data, (list, tuple)) and len(em_data) > 0:
-                    if isinstance(em_data[0], (list, tuple)): em_data = em_data[0]
-                    emode_threshold = em_data[1] / 10000
-                    emode_bonus = (em_data[2] - 10000) / 10000
-        except Exception: pass
-
-        # Use ALL detected protocol reserves (enables liquidating any token)
-        token_list = list(self.reserve_configs.items()) # list of (addr_l, config)
-        if not token_list:
-            logger.info(f"[{self.name}] token_list is empty in _get_best_tokens_and_fresh_hf")
-            # Try to refresh if empty
-            self._refresh_reserve_configs()
-            token_list = list(self.reserve_configs.items())
-        calls = []
-        for addr_l, _ in token_list:
-            call_data = self.data_provider.encodeABI("getUserReserveData", [checksum(addr_l), checksum(user)])
-            calls.append({"target": self.data_provider.address, "callData": call_data})
-
-        try:
-            _, return_data = mc.functions.aggregate(calls).call()
+                gap = abs(u_p - c_p) / min(u_p, c_p)
+                if gap > 0.02:
+                    opportunities.append({
+                        "token": item["address"], "symbol": item["symbol"],
+                        "gap": gap, "u_price": u_p, "c_price": c_p,
+                        "u_liq": item.get("liq", 10000), "c_liq": item.get("liq", 10000),
+                        "univ3Pool": item["univ3Pool"], "camelotPool": item["camelotPool"],
+                        "isCamelotV3": item.get("isCamelotV3", False)
+                    })
         except Exception as e:
-            logger.info(f"[{self.name}] Multicall for user reserve data failed: {e}")
-            # Fallback to individual calls if multicall fails (rare on Arbitrum)
-            return_data = []
-            for call in calls:
-                try:
-                    res = self._w3.eth.call({"to": call["target"], "data": call["callData"]})
-                    return_data.append(res)
-                except:
-                    return_data.append(b"")
+            logger.error(f"Multicall price check failed: {e}")
 
-        best_col_score = 0
-        best_col = None
-        best_debt_score = 0
-        best_debt = None
-        total_fresh_weighted_col = 0
-        total_fresh_debt = 0
-        missing_price = False
+        return opportunities
 
-        for i, raw_res in enumerate(return_data):
-            addr, config = token_list[i]
-            sym = config.get("symbol", "???")
+    async def event_listener(self):
+        """
+        Hybrid Sentinel WSS:
+        1. Subscribes to Swap events on watchlist tokens.
+        2. Filters by pool addresses to save Alchemy Compute Units.
+        3. Triggers immediate price check on any relevant buy/sell.
+        """
+        from websockets import connect
+        # Topic 0 for Uniswap V3 / Algebra Swap
+        TOPIC_V3 = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
+        # Topic 0 for Uniswap V2 / Camelot Legacy Swap
+        TOPIC_V2 = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"
 
+        keys = cfg("network", "alchemy_keys")
+        if not keys: return
+
+        key_idx = 0
+        while True:
+            key = keys[key_idx % len(keys)]
+            wss_url = f"wss://arb-mainnet.g.alchemy.com/v2/{key}"
             try:
-                # [0] currentATokenBalance, [1] currentStableDebt, [2] currentVariableDebt...
-                rd = w3.codec.decode(["uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint40", "bool"], raw_res)
+                async with connect(wss_url) as ws:
+                    # We subscribe to BOTH V2 and V3 Swap topics
+                    sub = {
+                        "jsonrpc":"2.0", "id":1, "method":"eth_subscribe",
+                        "params":["logs", {"topics":[[TOPIC_V3, TOPIC_V2]]}]
+                    }
+                    await ws.send(json.dumps(sub))
+                    await ws.recv()
+                    logger.info(f"Sentinel WSS active on key {key_idx % len(keys)}")
 
-                col_bal = rd[0]
-                debt_bal = rd[1] + rd[2] # Total debt = stable + variable
-                if col_bal == 0 and debt_bal == 0: continue
+                    while True:
+                        msg = await ws.recv()
+                        data = json.loads(msg)
+                        res = data.get("params", {}).get("result", {})
+                        emitter = res.get("address", "").lower()
 
-                logger.info(f"[{self.name}] User {user[:8]} has {sym}: col={col_bal}, debt={debt_bal}")
-
-                price = get_token_price_usd(addr, force_fresh=force_fresh)
-                if price == 0:
-                    logger.info(f"[{self.name}] Price missing for {sym} ({addr}) - skipping fresh HF")
-                    missing_price = True
-                    continue
-
-                decimals = config["decimals"]
-
-                if col_bal > 0:
-                    usd_val = (col_bal / 10**decimals) * price
-
-                    threshold = config["threshold"]
-                    bonus     = config["bonus"]
-                    if user_emode > 0 and config["emode_category"] == user_emode:
-                        threshold = emode_threshold or threshold
-                        bonus     = emode_bonus if emode_bonus is not None else bonus
-
-                    total_fresh_weighted_col += usd_val * threshold
-                    score = usd_val * (1 + bonus) if cfg("strategy", "prioritize_high_bonus") else usd_val
-                    if score > best_col_score:
-                        best_col_score = score
-                        best_col = (addr, sym, bonus)
-
-                if debt_bal > 0:
-                    usd_val = (debt_bal / 10**decimals) * price
-                    total_fresh_debt += usd_val
-                    if usd_val > best_debt_score:
-                        best_debt_score = usd_val
-                        best_debt = (addr, sym, debt_bal)
-            except Exception: continue
-
-        if missing_price or not best_col or not best_debt or total_fresh_debt == 0:
-            # If we miss ANY price for an asset the user holds, the local HF
-            # will be incorrect. Fall back to protocol HF.
-            return None
-
-        fresh_hf = total_fresh_weighted_col / total_fresh_debt
-        # Calculate the total USD value of all collateral assets (unweighted)
-        total_col_usd_unweighted = 0
-        for i, (addr, config) in enumerate(token_list):
-            rd = w3.codec.decode(["uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "uint40", "bool"], return_data[i])
-            if rd[0] > 0:
-                price = get_token_price_usd(addr)
-                total_col_usd_unweighted += (rd[0] / 10**config["decimals"]) * price
-
-        # We need the weighted average liquidation threshold to perform
-        # accurate local math in the real-time tracker.
-        # HF = (Total Collateral USD * Avg Threshold) / Total Debt USD
-        avg_threshold = total_fresh_weighted_col / total_col_usd_unweighted if total_col_usd_unweighted > 0 else 0
-
-        return {
-            "fresh_hf": fresh_hf,
-            "col_token": best_col[0], "col_symbol": best_col[1], "col_bonus": best_col[2],
-            "col_price": get_token_price_usd(best_col[0]),
-            "debt_token": best_debt[0], "debt_symbol": best_debt[1], "debt_raw": best_debt[2],
-            "debt_price": get_token_price_usd(best_debt[0]),
-            "used_threshold": avg_threshold
-        }
-
-    def check_position(self, user: str, account_data: Optional[tuple] = None, force_fresh: bool = False) -> Optional[dict]:
-        """
-        Check a single user's health factor. Returns position dict if liquidatable
-        or approaching liquidation. Returns None if healthy.
-        """
-        try:
-            if account_data:
-                data = account_data
-            else:
-                data = self.pool.functions.getUserAccountData(checksum(user)).call()
-
-            total_col_base  = data[0]
-            total_debt_base = data[1]
-            hf_raw          = data[5]
-
-            if total_debt_base == 0: return None
-
-            # ── Real-Time Edge ──────────────────────────────────────────
-            hf = health_factor_float(hf_raw)
-            best_info = None
-
-            # Watch everything up to 1.15
-            if hf < 1.3:
-                best_info = self._get_best_tokens_and_fresh_hf(user, force_fresh=force_fresh)
-                if best_info: hf = best_info["fresh_hf"]
-
-            col_usd    = wei_to_usd_base(total_col_base)
-            debt_usd   = wei_to_usd_base(total_debt_base)
-            min_debt = cfg("strategy", "min_debt_usd")
-            max_debt = cfg("strategy", "max_debt_usd")
-
-            if debt_usd < min_debt or debt_usd > max_debt: return None
-
-            if hf > 1.15: return None
-
-            if not best_info:
-                best_info = self._get_best_tokens_and_fresh_hf(user)
-            if not best_info: return None
-
-            col_token    = best_info["col_token"]
-            col_symbol   = best_info["col_symbol"]
-            col_bonus    = best_info["col_bonus"]
-            debt_token   = best_info["debt_token"]
-            debt_symbol  = best_info["debt_symbol"]
-            debt_raw     = best_info["debt_raw"]
-
-            # Compatibility for real-time tracker keys
-            pos_out = {
-                "protocol":          self.name,
-                "user":              user,
-                "address":           user,
-                "collateral_token":  col_token,
-                "col_token":         col_token,
-                "collateral_symbol": col_symbol,
-                "col_symbol":        col_symbol,
-                "collateral_bonus":  col_bonus,
-                "col_bonus":         col_bonus,
-                "debt_token":        debt_token,
-                "debt_symbol":       debt_symbol,
-                "debt_to_cover":     0, # Placeholder
-                "health_factor":     hf,
-                "col_price":         best_info["col_price"],
-                "debt_price":        best_info["debt_price"],
-                "total_debt_usd":    debt_usd,
-                "total_col_usd":     col_usd,
-                "pool_address":      self.pool_addr,
-                "used_threshold":    best_info.get("used_threshold"),
-            }
-
-            # Close factor: 100% if hf < 0.95 OR position < $2k, else 50%
-            close_factor = cfg("strategy", "close_factor")
-            if hf < 0.95 or debt_usd < 2000:
-                close_factor = 1.0
-
-            debt_to_cover = int(debt_raw * close_factor)
-            pos_out["debt_to_cover"] = debt_to_cover
-
-            _, _, swap_params = get_best_swap(col_token, debt_token, debt_to_cover)
-            pos_out["swap_params"] = swap_params
-
-            return pos_out
-        except Exception as e:
-            logger.debug(f"[{self.name}] check_position error for {user[:8]}: {e}")
-            return None
-
-    def scan_all(self, zombie_queue: Optional[ZombieQueue] = None) -> List[dict]:
-        """Scan all known borrowers."""
-        return self.scan_users(list(self._borrowers), zombie_queue=zombie_queue)
-
-    def scan_users(self, users: List[str], zombie_queue: Optional[ZombieQueue] = None) -> List[dict]:
-        """
-        Scan a specific list of borrowers using Multicall3.
-        """
-        liquidatable = []
-        if not users: return []
-        
-        w3 = get_web3()
-        mc = w3.eth.contract(address=MULTICALL3_ADDR, abi=MULTICALL3_ABI)
-        
-        batch_size = cfg("scanning", "batch_size") or 500
-
-        for i in range(0, len(users), batch_size):
-            chunk = users[i : i + batch_size]
-            calls = []
-            
-            for user in chunk:
-                call_data = self.pool.encodeABI("getUserAccountData", [checksum(user)])
-                calls.append({"target": self.pool.address, "callData": call_data})
-            
-            try:
-                _, return_data = mc.functions.aggregate(calls).call()
-                
-                for j, raw_res in enumerate(return_data):
-                    user = chunk[j]
-                    dec = w3.codec.decode(["uint256", "uint256", "uint256", "uint256", "uint256", "uint256"], raw_res)
-                    
-                    if dec[1] == 0:
-                        if user in self._borrowers:
-                            self._borrowers.remove(user)
-                            from .database import remove_borrower
-                            remove_borrower(self.name, user)
-                        if zombie_queue:
-                            zombie_queue.remove(self.name, user)
-                        remove_position(self.name, user)
-                        continue
-                    
-                    hf = health_factor_float(dec[5])
-                    # Watch everything up to 1.15
-                    if hf > 1.2: continue # Slight buffer
-                    
-                    pos = self.check_position(user, account_data=dec)
-                    if pos:
-                        # Persist to categorized JSON
-                        upsert_position(pos)
-
-                        if zombie_queue:
-                            result = zombie_queue.update(self.name, user, pos)
-                            if result == "fire":
-                                liquidatable.append(pos)
-                        elif hf <= 1.0:
-                            liquidatable.append(pos)
-                            
+                        # Use local filter for efficiency
+                        if emitter in self.watched_pools:
+                            match = next((it for it in self.watchlist if it["univ3Pool"].lower() == emitter or it["camelotPool"].lower() == emitter), None)
+                            if match:
+                                logger.info(f"BACKRUN TRIGGER: Swap detected on {match['symbol']} pool {emitter}")
+                                # Immediate price check for this token
+                                opps = self.check_all_prices_multicall()
+                                for opp in opps:
+                                    if opp["token"].lower() == match["address"].lower():
+                                        if self.on_opportunity: await self.on_opportunity(opp)
             except Exception as e:
-                logger.error(f"[{self.name}] Multicall batch error: {e}")
-                for user in chunk:
-                    pos = self.check_position(user)
-                    if pos:
-                        upsert_position(pos)
-                        if hf <= 1.0: liquidatable.append(pos)
+                wait = min(60, 5 * (2**(key_idx % 3)))
+                logger.warning(f"WSS Error: {e}. Reconnecting in {wait}s...")
+                key_idx += 1
+                await asyncio.sleep(wait)
 
-        return liquidatable
-
-    def get_borrower_count(self) -> int:
-        return len(self._borrowers)
-
-
-from .zombie_queue import get_zombie_queue
-
-class MultiProtocolMonitor:
-    """
-    Manages multiple ProtocolMonitor instances.
-    """
-
-    def __init__(self, on_liquidatable=None):
-        self.monitors: dict = {}
-        self.zombie_queue = get_zombie_queue(
-            entry_hf=cfg("strategy", "zombie_queue", "entry_hf"),
-            fire_hf=cfg("strategy",  "zombie_queue", "fire_hf")
-        )
-        self.on_liquidatable = on_liquidatable
-        self.velocity = VelocityTracker()
-        self._init_protocols()
-
-    def _init_protocols(self):
-        protocols = cfg("protocols")
-        AAVE_V3_BORROW = "0xb3d084820fb1a9decffb176436bd02558d15fac9b0ddfed8c465bc7359d7dce0"
-        AAVE_V2_BORROW = "0xc6a898309e823ee50bac64e45ca8adba6690e99e7841c45d39871800d985639b"
-
-        for name, pcfg in protocols.items():
-            if not pcfg.get("enabled", False): continue
-            pool_addr = pcfg.get("pool", "")
-            dp_addr   = pcfg.get("data_provider", "")
-            if not pool_addr or pool_addr.startswith("0x000"): continue
-            
-            topic = AAVE_V3_BORROW
-            if "radiant" in name.lower(): topic = AAVE_V2_BORROW
-
-            self.monitors[name] = ProtocolMonitor(
-                name=name,
-                pool_addr=pool_addr,
-                data_provider_addr=dp_addr,
-                borrow_topic=topic
-            )
-            logger.info(f"Initialized protocol monitor: {name}")
-
-    def load_all_borrowers(self):
-        w3            = get_web3()
-        current_block = w3.eth.block_number
-
-        for name, monitor in self.monitors.items():
-            monitor.load_borrowers_from_db()
-            last_block = get_last_scan_block(name)
-            ARBITRUM_50_DAYS = 17_280_000
-
-            if last_block == 0:
-                from_block = max(0, current_block - ARBITRUM_50_DAYS)
-            else:
-                from_block = last_block + 1
-
-        for name, monitor in self.monitors.items():
-            last_block = get_last_scan_block(name)
-            if last_block == 0:
-                from_block = max(0, current_block - ARBITRUM_50_DAYS)
-            else:
-                from_block = last_block + 1
-            
-            if from_block < current_block:
-                def _streaming_callback(proto_name, users):
-                    m = self.monitors.get(proto_name)
-                    if not m: return
-                    found = m.scan_users(users, zombie_queue=self.zombie_queue)
-                    if found:
-                        liquidatable = [p for p in found if p.get("health_factor", 2.0) <= 1.0]
-                        if liquidatable and self.on_liquidatable:
-                            self.on_liquidatable(liquidatable)
-                        for pos in found:
-                            upsert_position(pos)
-
-                monitor.load_borrowers_from_events(from_block, current_block, on_batch_found=_streaming_callback)
-
-    def refresh_borrowers(self, hours: int = 1):
-        """Systematic deep scan for new borrowers (default every 1hr)."""
-        try:
-            w3 = get_web3()
-            current_block = w3.eth.block_number
-        except Exception: return
-
-        # Arbitrum is ~4 blocks per second. 1hr = 14400 blocks.
-        blocks_per_hr = 14400
-        lookback = hours * blocks_per_hr
-
-        for name, monitor in self.monitors.items():
-            last_block = get_last_scan_block(name)
-            # Ensure we don't skip blocks, but also don't scan too far back if first run
-            from_block = (last_block + 1) if last_block > 0 else (current_block - lookback)
-            
-            if from_block < current_block:
-                logger.info(f"[{name}] Periodic borrower refresh: {from_block:,} -> {current_block:,}")
-                def _streaming_callback(proto_name, users):
-                    m = self.monitors.get(proto_name)
-                    if not m: return
-                    # Scan new borrowers immediately to see if they are at risk
-                    found = m.scan_users(users, zombie_queue=self.zombie_queue)
-                    if found:
-                        liquidatable = [p for p in found if p.get("health_factor", 2.0) <= 1.0]
-                        if liquidatable and self.on_liquidatable:
-                            self.on_liquidatable(liquidatable)
-                        for pos in found:
-                            upsert_position(pos)
-
-                monitor.load_borrowers_from_events(from_block, current_block, on_batch_found=_streaming_callback)
-
-    def scan_zombies(self, force_fresh: bool = False):
-        """High-frequency scan of active users in the Zombie Queue."""
-        watching = self.zombie_queue.get_watching()
-        if not watching: return []
-
-        liquidatable = []
-        for pos in watching:
-            m = self.monitors.get(pos['protocol'])
-            if m:
-                # check_position already updates persistence and zombie queue
-                res = m.check_position(pos['user'], force_fresh=force_fresh)
-                if res and res.get('health_factor', 2.0) <= 1.0:
-                    liquidatable.append(res)
-        return liquidatable
-
-    def scan_all_protocols(self) -> List[dict]:
-        all_liquidatable = []
-
-        # 1. Scan everything
-        for name, monitor in self.monitors.items():
-            try:
-                liquidatable = monitor.scan_all(zombie_queue=self.zombie_queue)
-                all_liquidatable.extend(liquidatable)
-            except Exception as e:
-                logger.error(f"[{name}] Scan error: {e}")
-
-        # 2. Track velocity
-        watching = self.zombie_queue.get_watching()
-        for pos in watching:
-            self.velocity.record(pos["protocol"], pos["user"], pos["health_factor"])
-
-        # 3. Cleanup stale positions from JSON files
-        # A position is stale if it's NOT in the current scan results (meaning HF > 1.15 or debt = 0)
-        # We'll use a set of currently "active" (at-risk) keys
-        active_keys = set()
-        # We can't easily get all active from the monitors without re-scanning
-        # So we'll rely on the fact that if a position is in zombie_queue, it's active.
-        # But we also have "Watching" which might be up to 1.15.
-
-        # Let's collect all positions returned by check_position in this cycle.
-        # Actually, scan_all already calls upsert_position for everything it finds.
-
-        # To truly clean up, we should check which positions in the JSON stores
-        # WERE NOT updated in this cycle.
-        from .persistence import critical_store, zombies_store, watching_store
-        now = time.time()
-        for store in [critical_store, zombies_store, watching_store]:
-            stored_items = store.get_all_list()
-            for item in stored_items:
-                # If not updated in the last 2 cycles (interval * 2), remove it
-                if now - item.get("last_updated", 0) > (cfg("scanning", "main_loop_interval_seconds") * 2.5):
-                    remove_position(item['protocol'], item['address'])
-
-        # 4. Ready to fire
-        ready = self.zombie_queue.get_ready()
-        for pos in ready:
-            if pos not in all_liquidatable:
-                all_liquidatable.append(pos)
-
-        self.zombie_queue.evict_old()
-        self.velocity.cleanup()
-
-        return all_liquidatable
-
-    def get_stats(self) -> dict:
-        total = sum(m.get_borrower_count() for m in self.monitors.values())
-        return {
-            "protocols":       list(self.monitors.keys()),
-            "total_borrowers": total,
-            "zombie_watching": self.zombie_queue.size(),
-        }
+    async def static_scanner_loop(self):
+        """Static scan every 12 seconds using Multicall."""
+        logger.info("Sentinel Static Scanner started (12s interval)")
+        while True:
+            self._load_watchlist()
+            opps = self.check_all_prices_multicall()
+            for opp in opps:
+                if self.on_opportunity: await self.on_opportunity(opp)
+            await asyncio.sleep(12)
